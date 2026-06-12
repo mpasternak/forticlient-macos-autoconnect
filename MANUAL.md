@@ -11,6 +11,7 @@ see [README.md](README.md).
 | `forti-disconnect.scpt` | Disconnects the active tunnel                    |
 | `forti-status.scpt`     | Prints the connected profile name, or nothing    |
 | `forti-debug.scpt`      | Diagnostic dump of the FortiClient UI tree (a bash script, despite the extension) |
+| `release.sh`            | Cuts a CalVer release (git tag + GitHub release) |
 
 ## Requirements
 
@@ -273,6 +274,36 @@ The two profiles used default to `IHIT` and `IPIS`; override them with
 `FORTI_TEST_PROFILE_A` / `FORTI_TEST_PROFILE_B`. Both must exist in
 FortiClient's dropdown and have `forti-vpn-<name>` Keychain items (the
 suite warns upfront if not).
+
+## Releasing
+
+Versioning is **CalVer**, and a git tag is the only version record — there
+is no package manifest to bump. The tag for a day's first release is
+`vYYYY.MM.DD`; a second, third, … release on the same day appends a micro:
+`vYYYY.MM.DD.1`, `vYYYY.MM.DD.2`, and so on.
+
+```bash
+./release.sh             # cut and push today's release
+./release.sh --dry-run   # preview the version and notes, change nothing
+```
+
+`release.sh` refuses to run unless the working tree is clean, you are on
+`main`, and `HEAD` is already pushed (the tag must point at a published
+commit). It then runs the GUI-free safe tests, computes the next CalVer tag,
+creates an **annotated** tag whose body is the commit subjects since the
+previous tag, pushes the tag, and — if `gh` is installed and authenticated —
+creates a matching GitHub release. Useful flags:
+
+| Flag             | Effect                                                       |
+| ---------------- | ------------------------------------------------------------ |
+| `--dry-run`      | Print the computed version and release notes, then stop      |
+| `--no-gh`        | Create and push the tag, but skip the GitHub release         |
+| `--skip-tests`   | Skip the safe-test gate (not recommended)                    |
+| `--allow-branch` | Permit releasing from a branch other than `main`             |
+
+To undo a mistaken local tag before it is pushed: `git tag -d <version>`.
+Once a tag is pushed (and especially once a GitHub release exists), prefer
+cutting a new micro over deleting the published tag.
 
 ## Debugging
 

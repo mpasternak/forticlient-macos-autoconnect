@@ -18,4 +18,4 @@ repos:
         types: [file]
       - id: shellcheck
         args: [--shell=bash]
-        files: ^tests/.*\.sh$
+        files: ^(release\.sh|tests/.*\.sh)$

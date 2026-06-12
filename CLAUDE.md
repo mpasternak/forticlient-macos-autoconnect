@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A CLI workaround for FortiClient VPN on macOS, which ships no command-line interface. AppleScripts drive the FortiClient GUI via System Events accessibility APIs: `forti.scpt` selects a VPN profile, fills credentials from the macOS login Keychain, clicks Connect, polls until the tunnel is up, then hides the window and posts a notification; `forti-disconnect.scpt` does the reverse. `forti-status.scpt` is a read-only query — it prints the connected profile's name to stdout (exit 0) or nothing (exit 1), without launching the app, changing state, or stealing focus.
 
-There is no build system or package manager — just the scripts, README.md (short, user-facing) and MANUAL.md (technical reference). There *are* lint gates: a GitHub Actions CI pipeline (osacompile syntax check of all three AppleScripts on macOS, shellcheck of `forti-debug.scpt` and `tests/*.sh` on Ubuntu) and pre-commit hooks (whitespace/EOF/yaml checks plus the same shellcheck). Testing is **manual and attended**: `tests/manual-test.sh` is an interactive suite that drives the real GUI and real VPN tunnels — CI cannot run it (only its `--safe-only` subset is GUI-free); never invoke the GUI tests autonomously, they drop the user's active VPN.
+There is no build system or package manager — just the scripts, README.md (short, user-facing) and MANUAL.md (technical reference). Releases are cut by `release.sh`, a CalVer tagger: the git tag (`vYYYY.MM.DD`, with a `.N` micro for same-day re-releases) is the only version record — there is nothing to "bump" in a file. There *are* lint gates: a GitHub Actions CI pipeline (osacompile syntax check of all three AppleScripts on macOS, shellcheck of `forti-debug.scpt`, `release.sh` and `tests/*.sh` on Ubuntu) and pre-commit hooks (whitespace/EOF/yaml checks plus the same shellcheck). Testing is **manual and attended**: `tests/manual-test.sh` is an interactive suite that drives the real GUI and real VPN tunnels — CI cannot run it (only its `--safe-only` subset is GUI-free); never invoke the GUI tests autonomously, they drop the user's active VPN.
 
 ## Commands
 
@@ -34,6 +34,10 @@ tests/manual-test.sh
 
 # Diagnostic dump of the FortiClient UI tree, tunnel interfaces, and Keychain entries
 bash forti-debug.scpt
+
+# Cut a CalVer release (tag vYYYY.MM.DD[.N] + GitHub release); preview first
+./release.sh --dry-run
+./release.sh
 
 # Verify the tunnel independently of the GUI
 ifconfig | grep -E "^(utun|ipsec)"
