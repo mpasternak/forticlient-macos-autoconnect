@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  applescript-syntax:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check AppleScript files
+        run: |
+          osacompile -o /tmp/forti.scptd forti.scpt
+          osacompile -o /tmp/forti-disconnect.scptd forti-disconnect.scpt
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck forti-debug.scpt
+        run: shellcheck --shell=bash forti-debug.scpt

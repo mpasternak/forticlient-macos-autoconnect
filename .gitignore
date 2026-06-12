@@ -1,0 +1,12 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Compiled AppleScript bundles
+*.scptd
+
+# Debug output files
+dom_dump_*.html
+*.log
