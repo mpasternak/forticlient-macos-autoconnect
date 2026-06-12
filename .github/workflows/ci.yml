@@ -21,5 +21,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: shellcheck forti-debug.scpt
-        run: shellcheck --shell=bash forti-debug.scpt
+      - name: shellcheck forti-debug.scpt and test suite
+        run: shellcheck --shell=bash forti-debug.scpt tests/*.sh

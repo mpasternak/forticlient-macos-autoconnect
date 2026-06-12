@@ -16,3 +16,6 @@ repos:
         # forti-debug.scpt is bash despite the extension; without this
         # override the hook's default `types: [shell]` never matches it
         types: [file]
+      - id: shellcheck
+        args: [--shell=bash]
+        files: ^tests/.*\.sh$

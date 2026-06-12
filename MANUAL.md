@@ -97,17 +97,33 @@ What happens:
    line, the Keychain account attribute is not consulted at all.
 2. FortiClient is activated; the script waits up to 10 s for its window to
    appear (a cold launch can be slow), then enables the accessibility tree.
-3. If the tunnel is already up (a **Disconnect** button is showing) *and* the
-   "VPN Name" dropdown shows the requested profile, the script reports
-   "Already connected" and exits successfully. If a **different** profile is
-   connected, it fails with error 7 instead of silently leaving you on the
-   wrong VPN. (If the dropdown's value cannot be read while connected, the
-   profile check is skipped and any active tunnel counts as success.)
-4. The profile is selected in the "VPN Name" dropdown.
+3. If the tunnel is already up — a **Disconnect** button together with the
+   status labels (**Duration**, **Bytes Received**, **Bytes Sent**); the
+   Disconnect button alone only means "connecting", where it doubles as a
+   cancel — the script checks the active profile name (in the connected view
+   the form is gone and the profile is the static text following the
+   "VPN Name" label). On a match it reports "Already connected" and exits
+   successfully; on a mismatch it posts a "Switching" notification,
+   **disconnects automatically**, waits for the form to come back, and
+   continues with the normal connect flow. If a connection attempt is still
+   in progress, the script does not touch the form and simply waits for the
+   outcome (step 7); should that attempt turn out to have targeted a
+   different profile, the script fails with error 7.
+4. The profile is selected in the "VPN Name" dropdown — skipped when the
+   dropdown already shows the requested profile, because clicking the
+   currently-selected menu item fails in FortiClient's web view. Selection
+   tries native menu-item addressing (`menu 1`, then the bare form) and
+   falls back to typed-prefix selection (typing the name + Enter); success
+   is verified by re-reading the dropdown's value, not by the click.
 5. Username and password are typed into the form.
 6. **Connect** is clicked.
-7. The script polls for up to ~30 s until the button changes to
-   **Disconnect**.
+7. The script polls for up to ~30 s until the **Disconnect** button *and*
+   the **Duration** status label are both present. The Disconnect button
+   alone is not used as the success signal — FortiClient shows it already
+   while connecting; the status labels appear only once the tunnel is
+   actually up. (FortiClient briefly hides and re-shows its window around
+   the moment the connection completes; the script hides it only after the
+   labels appear, so it stays hidden.)
 8. On success the FortiClient window is hidden (the app keeps running and
    holds the tunnel) and a "Connected" notification is shown; on failure you
    get a "Failed" notification and a non-zero exit.
@@ -143,8 +159,8 @@ forti.scpt: execution error: No Keychain item with service name 'forti-vpn-X' ..
 | 3  | FortiClient window did not appear, or "VPN Name" popup not found (accessibility tree not exposed?) |
 | 4  | Profile not present in the "VPN Name" dropdown                     |
 | 5  | Expected UI element not found (Username/Password field, Connect)   |
-| 6  | Connection failed or timed out after ~30 s                         |
-| 7  | Already connected to a different profile — disconnect first        |
+| 6  | Connection, or auto-disconnect during a profile switch, timed out after ~30 s |
+| 7  | An externally started connection completed on a different profile  |
 | 8  | FortiClient is not installed or failed to launch                   |
 
 `forti-disconnect.scpt` error numbers:
@@ -156,6 +172,29 @@ forti.scpt: execution error: No Keychain item with service name 'forti-vpn-X' ..
 
 To extract the error number in a shell script, parse the trailing `(N)` from
 stderr.
+
+## Testing
+
+There is an interactive test suite for **manual, attended** runs:
+
+```bash
+tests/manual-test.sh                # full suite — drives the real GUI
+tests/manual-test.sh --safe-only    # only the GUI-free checks
+```
+
+The safe tests (syntax compilation, usage error, missing Keychain item) run
+unconditionally. The GUI tests connect and disconnect **real VPN tunnels**
+— each one explains what it is about to do and waits for Enter (`s` skips
+it), so you can run any subset. Covered scenarios: disconnect from any
+state, fresh connect, already-connected fast path, automatic profile
+switch in both directions, and disconnect-when-not-connected. Each test
+verifies the exit status and, for failures, the `(N)` error number on
+stderr.
+
+The two profiles used default to `IHIT` and `IPIS`; override them with
+`FORTI_TEST_PROFILE_A` / `FORTI_TEST_PROFILE_B`. Both must exist in
+FortiClient's dropdown and have `forti-vpn-<name>` Keychain items (the
+suite warns upfront if not).
 
 ## Debugging
 
@@ -180,8 +219,10 @@ Common failures and what they mean:
 | Error `(3)` — popup or buttons not found                     | The accessibility tree is not exposed (the `AXManualAccessibility` call failed or ran too early — increase the `delay`), or the element has a different (e.g. localized) name. Run `forti-debug.scpt` and check the real names. |
 | Error `(2)` — `security: ... could not be found in the keychain. (44)` | No Keychain item for this profile. Check the service name with `security find-generic-password -s forti-vpn-<ProfileName>` — remember it is case-sensitive — and add the entry as in the Keychain section. |
 | Error `(2)` — "no readable account attribute"                | The item exists but was created without `-a`, or the username contains non-ASCII characters (`security` then prints the account as hex, which the script cannot parse). Delete and re-add the item with `-a <username>`, or pass the username as the second argument. |
-| Error `(4)` — profile is not selected / wrong profile connects | The argument must match the name shown in the dropdown entry. (The Keychain *service name* is the case-sensitive part; AppleScript's own string matching is case-insensitive.) If clicking the menu item misbehaves, replace the `click menu item` line with `keystroke profileName` followed by `key code 36` (Enter) after opening the popup — native menus select by typed prefix. |
-| Error `(7)` — already connected to a different profile       | Deliberate: the script refuses to report success while another profile's tunnel is up. Run `osascript forti-disconnect.scpt`, then connect again. |
+| Error `(4)` — profile is not selected / wrong profile connects | The argument must match the name shown in the dropdown entry. (The Keychain *service name* is the case-sensitive part; AppleScript's own string matching is case-insensitive.) The script tries `menu item … of menu 1 of` the popup, the bare `menu item … of` form, and finally typed-prefix selection (`keystroke profileName` + Enter), and raises (4) only when the dropdown's value still differs afterwards. |
+| Error `(4)` although the profile is visibly in the dropdown  | All three selection strategies failed, or the popup's `value` reads differently than the visible label (the verification compares against `value`). Run `forti-debug.scpt` and compare what the popup's value actually returns with what is displayed. |
+| Error `(7)` — connection completed on a different profile    | Rare race: a connect that was already in progress when the script started (begun by hand or by another invocation) finished on another profile. The script never interferes with an in-flight attempt; run `osascript forti-disconnect.scpt`, then connect again. When a different profile is already *fully* connected at start, the script disconnects and switches automatically instead — the active profile is read from the static text that follows the "VPN Name" label in the connected view (the dropdown does not exist there). |
+| Script declared success / hid the window while still connecting | Should not happen: the poll requires the `Duration` status label, not just the Disconnect button (which FortiClient shows already during the connecting phase, as a cancel). If it recurs, your FortiClient version may label the status fields differently — run `forti-debug.scpt` while connected and compare. |
 | Error `(8)` — FortiClient not found                          | FortiClient.app is not installed (or not in `/Applications`). Install the free "VPN only" client and configure your profiles once in its GUI. |
 | Fields stay empty although the script ran                    | Some web-view fields reject `set value`. Replace the assignment with: `click e`, then `keystroke "a" using command down`, then `keystroke theValue`. |
 | Error `(6)` but the VPN is up                                | The 30 s poll timed out (slow gateway / 2FA prompt). Increase the `repeat 15 times` / `delay 2` values. |

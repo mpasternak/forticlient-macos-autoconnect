@@ -16,8 +16,8 @@
 --       (accessibility tree not exposed?)
 --    4  profile not present in the "VPN Name" dropdown
 --    5  expected UI element not found (Username/Password field, Connect button)
---    6  connection failed or timed out
---    7  already connected to a different profile
+--    6  connection, or auto-disconnect during a profile switch, timed out
+--    7  an externally started connection completed on a different profile
 --    8  FortiClient is not installed or failed to launch
 
 -- Return the first element of `elems` with the given role and name, or
@@ -33,6 +33,28 @@ on findElement(elems, theRole, theName)
 	end tell
 	return missing value
 end findElement
+
+-- In the *connected* view the form is gone and the active profile is shown
+-- as the static text that follows the "VPN Name" label static text in
+-- document order ("entire contents" returns elements in that order).
+-- Returns "" when it cannot be determined.
+on activeProfileName(elems)
+	tell application "System Events"
+		set seenLabel to false
+		repeat with e in elems
+			try
+				if role of e is "AXStaticText" then
+					if seenLabel then
+						return name of e
+					else if name of e is "VPN Name" then
+						set seenLabel to true
+					end if
+				end if
+			end try
+		end repeat
+	end tell
+	return ""
+end activeProfileName
 
 on run argv
 	if (count of argv) is 0 then
@@ -65,6 +87,7 @@ on run argv
 		error "FortiClient.app not found or failed to launch — is FortiClient installed?" number 8
 	end try
 
+	set connectInProgress to false
 	tell application "System Events"
 		tell process "FortiClient"
 			set frontmost to true
@@ -91,80 +114,133 @@ on run argv
 
 			set elems to entire contents of window 1
 
-			-- already connected? (the form is replaced by a Disconnect button)
-			if my findElement(elems, "AXButton", "Disconnect") is not missing value then
-				-- make sure it is the *requested* tunnel before claiming success
-				set activeProfile to ""
-				set vpnPopup to my findElement(elems, "AXPopUpButton", "VPN Name")
-				if vpnPopup is not missing value then
-					try
-						set activeProfile to value of vpnPopup
-					on error
-						set activeProfile to "" -- popup exposes no value while connected; treat as unknown
-					end try
-				end if
-				if (activeProfile is not "") and (activeProfile is not profileName) then
-					error "Already connected to '" & activeProfile & "', not '" & profileName & "'. Disconnect first: osascript forti-disconnect.scpt" number 7
-				end if
-				set visible to false
-				display notification "Already connected: " & profileName with title "FortiClient VPN" sound name "Glass"
-				return
-			end if
-
-			-- select the requested profile in the "VPN Name" popup
-			set vpnPopup to my findElement(elems, "AXPopUpButton", "VPN Name")
-			if vpnPopup is missing value then
-				error "Popup 'VPN Name' not found — the accessibility tree is probably not exposed. Run forti-debug.scpt and see the MANUAL.md debugging table." number 3
-			end if
-			click vpnPopup
-			delay 0.4
-			set profileSelected to false
-			try
-				click menu item profileName of vpnPopup
-				set profileSelected to true
-			on error
-				-- close the popup menu we just opened, or it lingers over the
-				-- window and confuses the next run's element search
-				key code 53 -- Escape
-			end try
-			if not profileSelected then
-				error "Profile '" & profileName & "' not found in the 'VPN Name' dropdown — the name must match the dropdown entry." number 4
-			end if
-			delay 0.8
-
-			-- the web view may have re-rendered after the profile switch
-			set elems to entire contents of window 1
-			set userFieldFound to false
-			set passFieldFound to false
-			repeat with e in elems
-				try
-					if role of e is "AXTextField" then
-						if name of e is "Username" then
-							set value of e to vpnUser
-							set userFieldFound to true
-						else if name of e is "Password" then
-							set value of e to vpnPass
-							set passFieldFound to true
-						end if
+			-- A Disconnect button alone only means a connection attempt is at
+			-- least in progress (it doubles as a cancel while connecting); the
+			-- status labels (Duration / Bytes ...) appear once the tunnel is up.
+			set disconnectBtn to my findElement(elems, "AXButton", "Disconnect")
+			if disconnectBtn is not missing value then
+				if my findElement(elems, "AXStaticText", "Duration") is not missing value then
+					-- fully connected — is it the *requested* tunnel?
+					set activeProfile to my activeProfileName(elems)
+					if (activeProfile is "") or (activeProfile is profileName) then
+						set visible to false
+						display notification "Already connected: " & profileName with title "FortiClient VPN" sound name "Glass"
+						return
 					end if
-				end try
-			end repeat
-			if not userFieldFound then
-				error "Text field 'Username' not found — run forti-debug.scpt to inspect the real element names." number 5
-			end if
-			if not passFieldFound then
-				error "Text field 'Password' not found — run forti-debug.scpt to inspect the real element names." number 5
+					-- a different profile is up: disconnect it automatically and
+					-- fall through to the normal connect flow below
+					display notification "Switching: " & activeProfile & " → " & profileName with title "FortiClient VPN"
+					click disconnectBtn
+					set formBack to false
+					repeat 15 times
+						delay 2
+						set elems to entire contents of window 1
+						if my findElement(elems, "AXButton", "Connect") is not missing value then
+							set formBack to true
+							exit repeat
+						end if
+					end repeat
+					if not formBack then
+						error "Auto-disconnect from '" & activeProfile & "' did not complete within ~30 s; not connecting to '" & profileName & "'." number 6
+					end if
+				else
+					-- a connect started outside this script is still running —
+					-- don't touch the form, just wait for the outcome below
+					set connectInProgress to true
+				end if
 			end if
 
-			set connectBtn to my findElement(elems, "AXButton", "Connect")
-			if connectBtn is missing value then
-				error "Button 'Connect' not found — run forti-debug.scpt to inspect the real element names." number 5
+			if not connectInProgress then
+				-- select the requested profile in the "VPN Name" popup
+				set vpnPopup to my findElement(elems, "AXPopUpButton", "VPN Name")
+				if vpnPopup is missing value then
+					error "Popup 'VPN Name' not found — the accessibility tree is probably not exposed. Run forti-debug.scpt and see the MANUAL.md debugging table." number 3
+				end if
+				-- leave the dropdown alone when it already shows the requested
+				-- profile: clicking the currently-selected menu item fails in the
+				-- web view (field-observed as a spurious error 4)
+				set currentProfile to ""
+				try
+					set currentProfile to value of vpnPopup
+				on error
+					set currentProfile to "" -- value unreadable; select via the dropdown
+				end try
+				if currentProfile is not profileName then
+					click vpnPopup
+					delay 0.4
+					-- Chromium opens the <select> as a native menu. Proper System
+					-- Events addressing goes through "menu 1"; some builds accept
+					-- the bare form. Errors here are expected — success is verified
+					-- by reading the popup's value below, not by the click.
+					try
+						click menu item profileName of menu 1 of vpnPopup
+					on error
+						try
+							click menu item profileName of vpnPopup
+						end try
+					end try
+					delay 0.4
+					set newProfile to ""
+					try
+						set newProfile to value of vpnPopup -- unreadable mid-render: caught below as mismatch
+					end try
+					if newProfile is not profileName then
+						-- the menu is still open (both clicks failed): native menus
+						-- select by typed prefix, Enter confirms
+						keystroke profileName
+						delay 0.2
+						key code 36 -- Enter
+						delay 0.4
+						try
+							set newProfile to value of vpnPopup -- unreadable: caught below as mismatch
+						end try
+					end if
+					if newProfile is not profileName then
+						-- close whatever is still open, or it lingers over the
+						-- window and confuses the next run's element search
+						key code 53 -- Escape
+						error "Profile '" & profileName & "' not found in the 'VPN Name' dropdown — the name must match the dropdown entry. Run forti-debug.scpt and see the MANUAL.md debugging table." number 4
+					end if
+					delay 0.8
+					-- the web view may have re-rendered after the profile switch
+					set elems to entire contents of window 1
+				end if
+
+				set userFieldFound to false
+				set passFieldFound to false
+				repeat with e in elems
+					try
+						if role of e is "AXTextField" then
+							if name of e is "Username" then
+								set value of e to vpnUser
+								set userFieldFound to true
+							else if name of e is "Password" then
+								set value of e to vpnPass
+								set passFieldFound to true
+							end if
+						end if
+					end try
+				end repeat
+				if not userFieldFound then
+					error "Text field 'Username' not found — run forti-debug.scpt to inspect the real element names." number 5
+				end if
+				if not passFieldFound then
+					error "Text field 'Password' not found — run forti-debug.scpt to inspect the real element names." number 5
+				end if
+
+				set connectBtn to my findElement(elems, "AXButton", "Connect")
+				if connectBtn is missing value then
+					error "Button 'Connect' not found — run forti-debug.scpt to inspect the real element names." number 5
+				end if
+				click connectBtn
 			end if
-			click connectBtn
 		end tell
 	end tell
 
-	-- wait up to ~30 s for the button to flip to "Disconnect"
+	-- Wait up to ~30 s for the tunnel to come up. The Disconnect button alone
+	-- is not enough — it is already shown (as a cancel) while still connecting,
+	-- and FortiClient re-shows the window itself when the connection completes;
+	-- the status labels appear only in the truly connected view.
 	set connected to false
 	repeat 15 times
 		delay 2
@@ -173,11 +249,20 @@ on run argv
 				set elems to entire contents of window 1
 			end tell
 		end tell
-		if my findElement(elems, "AXButton", "Disconnect") is not missing value then
+		if (my findElement(elems, "AXButton", "Disconnect") is not missing value) and (my findElement(elems, "AXStaticText", "Duration") is not missing value) then
 			set connected to true
 			exit repeat
 		end if
 	end repeat
+
+	if connected and connectInProgress then
+		-- the attempt we waited for was started outside this script — make
+		-- sure it ended up on the requested profile
+		set activeProfile to my activeProfileName(elems)
+		if (activeProfile is not "") and (activeProfile is not profileName) then
+			error "A connection to '" & activeProfile & "' (not '" & profileName & "') was already in progress and completed. Disconnect first: osascript forti-disconnect.scpt" number 7
+		end if
+	end if
 
 	if connected then
 		tell application "System Events" to set visible of process "FortiClient" to false
