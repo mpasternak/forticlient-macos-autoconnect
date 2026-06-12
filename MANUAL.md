@@ -93,10 +93,16 @@ osascript forti.scpt HomeVPN some-other-username   # optional username override
 What happens:
 
 1. Credentials are read from the Keychain (before the GUI is touched, so a
-   missing Keychain item fails fast).
-2. FortiClient is activated and its accessibility tree is enabled.
-3. If the tunnel is already up (a **Disconnect** button is showing), the
-   script reports "Already connected" and exits successfully.
+   missing Keychain item fails fast). When a username is given on the command
+   line, the Keychain account attribute is not consulted at all.
+2. FortiClient is activated; the script waits up to 10 s for its window to
+   appear (a cold launch can be slow), then enables the accessibility tree.
+3. If the tunnel is already up (a **Disconnect** button is showing) *and* the
+   "VPN Name" dropdown shows the requested profile, the script reports
+   "Already connected" and exits successfully. If a **different** profile is
+   connected, it fails with error 7 instead of silently leaving you on the
+   wrong VPN. (If the dropdown's value cannot be read while connected, the
+   profile check is skipped and any active tunnel counts as success.)
 4. The profile is selected in the "VPN Name" dropdown.
 5. Username and password are typed into the form.
 6. **Connect** is clicked.
@@ -133,11 +139,13 @@ forti.scpt: execution error: No Keychain item with service name 'forti-vpn-X' ..
 | #  | Meaning                                                            |
 | -- | ------------------------------------------------------------------ |
 | 64 | Usage error — no profile argument given                            |
-| 2  | Keychain item missing or unreadable                                |
-| 3  | "VPN Name" popup not found (accessibility tree not exposed?)       |
-| 4  | Profile not present in the "VPN Name" dropdown (case-sensitive)    |
+| 2  | Keychain item missing, unreadable, or without an account attribute |
+| 3  | FortiClient window did not appear, or "VPN Name" popup not found (accessibility tree not exposed?) |
+| 4  | Profile not present in the "VPN Name" dropdown                     |
 | 5  | Expected UI element not found (Username/Password field, Connect)   |
 | 6  | Connection failed or timed out after ~30 s                         |
+| 7  | Already connected to a different profile — disconnect first        |
+| 8  | FortiClient is not installed or failed to launch                   |
 
 `forti-disconnect.scpt` error numbers:
 
@@ -168,9 +176,13 @@ Common failures and what they mean:
 | Symptom                                                      | Cause / fix                                                  |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | `osascript is not allowed assistive access (-25211)` or `(1002)` | The terminal app has no Accessibility permission. Grant it in *System Settings → Privacy & Security → Accessibility*, then restart the terminal. |
+| Error `(3)` — "No FortiClient window appeared within 10 s"   | FortiClient launched but never showed its window (very slow machine, or the app is stuck). Open FortiClient manually once and retry; if it is consistently slow, increase the `repeat 20 times` window-wait loop. |
 | Error `(3)` — popup or buttons not found                     | The accessibility tree is not exposed (the `AXManualAccessibility` call failed or ran too early — increase the `delay`), or the element has a different (e.g. localized) name. Run `forti-debug.scpt` and check the real names. |
 | Error `(2)` — `security: ... could not be found in the keychain. (44)` | No Keychain item for this profile. Check the service name with `security find-generic-password -s forti-vpn-<ProfileName>` — remember it is case-sensitive — and add the entry as in the Keychain section. |
-| Error `(4)` — profile is not selected / wrong profile connects | The argument must match the dropdown entry exactly (case-sensitive). If clicking the menu item misbehaves, replace the `click menu item` line with `keystroke profileName` followed by `key code 36` (Enter) after opening the popup — native menus select by typed prefix. |
+| Error `(2)` — "no readable account attribute"                | The item exists but was created without `-a`, or the username contains non-ASCII characters (`security` then prints the account as hex, which the script cannot parse). Delete and re-add the item with `-a <username>`, or pass the username as the second argument. |
+| Error `(4)` — profile is not selected / wrong profile connects | The argument must match the name shown in the dropdown entry. (The Keychain *service name* is the case-sensitive part; AppleScript's own string matching is case-insensitive.) If clicking the menu item misbehaves, replace the `click menu item` line with `keystroke profileName` followed by `key code 36` (Enter) after opening the popup — native menus select by typed prefix. |
+| Error `(7)` — already connected to a different profile       | Deliberate: the script refuses to report success while another profile's tunnel is up. Run `osascript forti-disconnect.scpt`, then connect again. |
+| Error `(8)` — FortiClient not found                          | FortiClient.app is not installed (or not in `/Applications`). Install the free "VPN only" client and configure your profiles once in its GUI. |
 | Fields stay empty although the script ran                    | Some web-view fields reject `set value`. Replace the assignment with: `click e`, then `keystroke "a" using command down`, then `keystroke theValue`. |
 | Error `(6)` but the VPN is up                                | The 30 s poll timed out (slow gateway / 2FA prompt). Increase the `repeat 15 times` / `delay 2` values. |
 | Everything worked yesterday, fails after FortiClient restart | Expected — `AXManualAccessibility` resets when the app restarts. The script re-enables it on every run; if you experimented manually, re-run the script rather than relying on a previous state. |

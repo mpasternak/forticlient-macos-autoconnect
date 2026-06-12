@@ -33,7 +33,7 @@ Full manual testing requires FortiClient installed with profiles already configu
 
 ## Exit-code contract
 
-Both scripts exit 0 on success (including "already connected" / "not connected") and 1 on failure. `osascript` maps **every** script error to exit status 1 — distinct exit codes are impossible without abandoning the `osascript forti.scpt` invocation form, so don't try. Instead, each failure mode raises `error "message" number N` and the number lands in the stderr text (`... (N)`). The number assignments (64 usage, 2 keychain, 3 accessibility tree, 4 profile missing, 5 UI element missing, 6 timeout) are documented in each script's header and in MANUAL.md — keep all three in sync when adding failure modes.
+Both scripts exit 0 on success (including "already connected" / "not connected") and 1 on failure. `osascript` maps **every** script error to exit status 1 — distinct exit codes are impossible without abandoning the `osascript forti.scpt` invocation form, so don't try. Instead, each failure mode raises `error "message" number N` and the number lands in the stderr text (`... (N)`). The number assignments (64 usage, 2 keychain, 3 window/accessibility tree, 4 profile missing, 5 UI element missing, 6 timeout, 7 different profile connected, 8 FortiClient not installed) are documented in each script's header and in MANUAL.md — keep all three in sync when adding failure modes.
 
 ## File naming quirk
 
