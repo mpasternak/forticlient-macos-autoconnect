@@ -1,6 +1,6 @@
 #!/bin/bash
-# tests/manual-test.sh — interactive manual test suite for forti.scpt and
-# forti-disconnect.scpt.
+# tests/manual-test.sh — interactive manual test suite for forti.scpt,
+# forti-disconnect.scpt and forti-status.scpt.
 #
 # The GUI tests drive the REAL FortiClient app and connect/disconnect REAL
 # VPN tunnels — run this locally, with FortiClient installed, both test
@@ -71,6 +71,44 @@ gui_test() {
     run_and_check "$@"
 }
 
+# status_check <desc> <expected-stdout> <expected-exit>
+# Asserts what forti-status.scpt reports about the CURRENT live VPN state:
+# the trimmed stdout (the profile name, or empty when nothing is connected)
+# and the exit status. run_and_check cannot do this — it discards stdout —
+# so status needs its own helper. Status is read-only, so this never changes
+# the tunnel.
+status_check() {
+    local desc="$1" want_out="$2" want_exit="$3"
+    echo
+    echo "-- $desc"
+    echo "   \$ osascript forti-status.scpt"
+    local out rc
+    out="$(osascript forti-status.scpt 2>/dev/null)"
+    rc=$?
+    if [[ "$rc" -eq "$want_exit" && "$out" == "$want_out" ]]; then
+        echo "   PASS  exit=$rc stdout='$out'"
+        PASS=$((PASS + 1))
+    else
+        echo "   FAIL  expected exit=$want_exit stdout='$want_out', got exit=$rc stdout='$out'"
+        FAIL=$((FAIL + 1))
+        FAILED_TESTS="$FAILED_TESTS
+  - $desc"
+    fi
+}
+
+# gui_status_check — status_check that runs only when the GUI section was
+# confirmed (status reads the live GUI, so it belongs with the GUI tests).
+gui_status_check() {
+    if [[ "$GUI_ENABLED" -eq 0 ]]; then
+        echo
+        echo "-- $1"
+        echo "   SKIP"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+    status_check "$@"
+}
+
 echo "FortiClient manual test suite"
 echo "Profiles: A=$PROFILE_A  B=$PROFILE_B  (override: FORTI_TEST_PROFILE_A/_B)"
 
@@ -95,6 +133,8 @@ run_and_check "forti.scpt compiles" \
     0 - osacompile -o /tmp/forti-test-syntax.scpt forti.scpt
 run_and_check "forti-disconnect.scpt compiles" \
     0 - osacompile -o /tmp/forti-disconnect-test-syntax.scpt forti-disconnect.scpt
+run_and_check "forti-status.scpt compiles" \
+    0 - osacompile -o /tmp/forti-status-test-syntax.scpt forti-status.scpt
 run_and_check "usage error without arguments (64)" \
     1 64 osascript forti.scpt
 run_and_check "missing Keychain item (2)" \
@@ -109,7 +149,8 @@ else
     echo
     echo "The GUI tests now run UNATTENDED (~3-5 min): cleanup disconnect,"
     echo "connect $PROFILE_A, already-connected check, auto-switch to $PROFILE_B"
-    echo "and back, disconnect, disconnect-again."
+    echo "and back, disconnect, disconnect-again — with forti-status checks"
+    echo "interleaved to confirm it reports the live profile."
     read -r -p ">> Press Enter to run them all, or [s] to skip: " ans
     [[ "$ans" == [sS] ]] || GUI_ENABLED=1
 fi
@@ -117,8 +158,14 @@ fi
 gui_test "disconnect from any state exits 0 (cleanup)" \
     0 - osascript forti-disconnect.scpt
 
+gui_status_check "status: nothing connected after cleanup" \
+    "" 1
+
 gui_test "connect $PROFILE_A" \
     0 - osascript forti.scpt "$PROFILE_A"
+
+gui_status_check "status reports $PROFILE_A" \
+    "$PROFILE_A" 0
 
 gui_test "already connected to $PROFILE_A (fast path)" \
     0 - osascript forti.scpt "$PROFILE_A"
@@ -126,11 +173,20 @@ gui_test "already connected to $PROFILE_A (fast path)" \
 gui_test "auto-switch $PROFILE_A -> $PROFILE_B" \
     0 - osascript forti.scpt "$PROFILE_B"
 
+gui_status_check "status reports $PROFILE_B after switch" \
+    "$PROFILE_B" 0
+
 gui_test "auto-switch $PROFILE_B -> $PROFILE_A" \
     0 - osascript forti.scpt "$PROFILE_A"
 
+gui_status_check "status reports $PROFILE_A after switch back" \
+    "$PROFILE_A" 0
+
 gui_test "disconnect after connect" \
     0 - osascript forti-disconnect.scpt
+
+gui_status_check "status: nothing connected after disconnect" \
+    "" 1
 
 gui_test "disconnect when not connected" \
     0 - osascript forti-disconnect.scpt

@@ -9,6 +9,7 @@ see [README.md](README.md).
 | ----------------------- | ------------------------------------------------ |
 | `forti.scpt`            | Connects to a given VPN profile                  |
 | `forti-disconnect.scpt` | Disconnects the active tunnel                    |
+| `forti-status.scpt`     | Prints the connected profile name, or nothing    |
 | `forti-debug.scpt`      | Diagnostic dump of the FortiClient UI tree (a bash script, despite the extension) |
 
 ## Requirements
@@ -138,6 +139,38 @@ Clicks **Disconnect**, waits up to ~30 s for the button to flip back to
 **Connect**, hides the window and posts a notification. If no tunnel is up,
 it reports "Not connected" and exits successfully.
 
+## Checking status
+
+```bash
+osascript forti-status.scpt
+```
+
+Prints the name of the currently-connected VPN profile to **stdout** and
+exits **0**; prints nothing and exits **1** when no tunnel is up. The exit
+code — not whether stdout is empty — is the authoritative connected/not
+signal, so both of these work:
+
+```bash
+# boolean test
+if osascript forti-status.scpt >/dev/null 2>&1; then echo "VPN is up"; fi
+
+# capture the active profile name
+profile=$(osascript forti-status.scpt 2>/dev/null) && echo "connected to $profile"
+```
+
+Unlike `forti.scpt` / `forti-disconnect.scpt`, status is **read-only and
+quiet**: it never launches FortiClient (a tunnel cannot be up if the app is
+not running), never changes the VPN state, and does not bring the window to
+the foreground or steal focus — it only reads the accessibility tree. In the
+common already-connected case it emits no step lines and no progress bar, so
+its stdout stays clean for use in `$(…)`.
+
+If a connection is **in progress** when you ask (the Disconnect button is
+showing but the tunnel is not yet fully up), status waits up to ~30 s for it
+to come up — showing the same progress bar as the connect flow — and then
+reports the profile; if it does not come up in time, status treats it as not
+connected. Notifications are never posted (it is a passive query).
+
 ## Console progress
 
 Both scripts narrate their steps on **stderr** (via AppleScript `log`) and
@@ -194,6 +227,20 @@ forti.scpt: execution error: No Keychain item with service name 'forti-vpn-X' ..
 | 3 | Neither "Disconnect" nor "Connect" button found                     |
 | 6 | Still connected after ~30 s                                         |
 
+`forti-status.scpt` exits **0** when a tunnel is up (printing the profile
+name to stdout) and **1** otherwise. Because exit 1 is also how it signals the
+ordinary "nothing connected" result, the trailing `(N)` distinguishes the two
+exit-1 cases:
+
+| # | Meaning                                                                |
+| - | ---------------------------------------------------------------------- |
+| 1 | Nothing connected — FortiClient not running, the Connect form is showing, or an in-progress attempt did not come up within ~30 s (a *normal* negative result, not a fault; stdout is empty) |
+| 3 | FortiClient is running but its accessibility tree could not be read (no window exposed, or Accessibility permission not granted) — status genuinely *could not tell* |
+
+A caller that only cares whether a VPN is up should check the exit code (or
+non-empty stdout) and ignore the number; the `(3)` case is worth surfacing
+because it means a setup problem, not "disconnected".
+
 To extract the error number in a shell script, parse the trailing `(N)` from
 stderr. Progress lines also land on stderr, but the `execution error` line
 is always the **last** one — parse the final line only (as
@@ -208,14 +255,19 @@ tests/manual-test.sh                # full suite — drives the real GUI
 tests/manual-test.sh --safe-only    # only the GUI-free checks
 ```
 
-The safe tests (syntax compilation, usage error, missing Keychain item) run
-unconditionally. The GUI tests connect and disconnect **real VPN tunnels**:
-the suite asks for confirmation once, then runs the whole GUI sequence
-unattended (~3–5 minutes), starting with a cleanup disconnect. Covered
-scenarios: disconnect from any state, fresh connect, already-connected
-fast path, automatic profile switch in both directions, and
-disconnect-when-not-connected. Each test verifies the exit status and,
-for failures, the `(N)` error number on stderr.
+The safe tests (syntax compilation of all three scripts, usage error,
+missing Keychain item) run unconditionally. The GUI tests connect and
+disconnect **real VPN tunnels**: the suite asks for confirmation once, then
+runs the whole GUI sequence unattended (~3–5 minutes), starting with a
+cleanup disconnect. Covered scenarios: disconnect from any state, fresh
+connect, already-connected fast path, automatic profile switch in both
+directions, and disconnect-when-not-connected. Each test verifies the exit
+status and, for failures, the `(N)` error number on stderr.
+
+The GUI section also checks `forti-status.scpt` against the live state:
+after each connect/switch it asserts that status prints the expected profile
+name to stdout and exits 0, and after the final disconnect that it prints
+nothing and exits 1.
 
 The two profiles used default to `IHIT` and `IPIS`; override them with
 `FORTI_TEST_PROFILE_A` / `FORTI_TEST_PROFILE_B`. Both must exist in

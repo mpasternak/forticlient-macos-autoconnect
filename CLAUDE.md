@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A CLI workaround for FortiClient VPN on macOS, which ships no command-line interface. AppleScripts drive the FortiClient GUI via System Events accessibility APIs: `forti.scpt` selects a VPN profile, fills credentials from the macOS login Keychain, clicks Connect, polls until the tunnel is up, then hides the window and posts a notification; `forti-disconnect.scpt` does the reverse.
+A CLI workaround for FortiClient VPN on macOS, which ships no command-line interface. AppleScripts drive the FortiClient GUI via System Events accessibility APIs: `forti.scpt` selects a VPN profile, fills credentials from the macOS login Keychain, clicks Connect, polls until the tunnel is up, then hides the window and posts a notification; `forti-disconnect.scpt` does the reverse. `forti-status.scpt` is a read-only query — it prints the connected profile's name to stdout (exit 0) or nothing (exit 1), without launching the app, changing state, or stealing focus.
 
-There is no build system or package manager — just the scripts, README.md (short, user-facing) and MANUAL.md (technical reference). There *are* lint gates: a GitHub Actions CI pipeline (osacompile syntax check of both AppleScripts on macOS, shellcheck of `forti-debug.scpt` and `tests/*.sh` on Ubuntu) and pre-commit hooks (whitespace/EOF/yaml checks plus the same shellcheck). Testing is **manual and attended**: `tests/manual-test.sh` is an interactive suite that drives the real GUI and real VPN tunnels — CI cannot run it (only its `--safe-only` subset is GUI-free); never invoke the GUI tests autonomously, they drop the user's active VPN.
+There is no build system or package manager — just the scripts, README.md (short, user-facing) and MANUAL.md (technical reference). There *are* lint gates: a GitHub Actions CI pipeline (osacompile syntax check of all three AppleScripts on macOS, shellcheck of `forti-debug.scpt` and `tests/*.sh` on Ubuntu) and pre-commit hooks (whitespace/EOF/yaml checks plus the same shellcheck). Testing is **manual and attended**: `tests/manual-test.sh` is an interactive suite that drives the real GUI and real VPN tunnels — CI cannot run it (only its `--safe-only` subset is GUI-free); never invoke the GUI tests autonomously, they drop the user's active VPN.
 
 ## Commands
 
@@ -17,9 +17,13 @@ osascript forti.scpt <ProfileName> [username]
 # Disconnect the active tunnel
 osascript forti-disconnect.scpt
 
-# Syntax-check the AppleScripts without running them (CI does this for both)
+# Print the connected profile name (stdout, exit 0), or nothing (exit 1)
+osascript forti-status.scpt
+
+# Syntax-check the AppleScripts without running them (CI does this for all three)
 osacompile -o /tmp/check.scpt forti.scpt
 osacompile -o /tmp/check2.scpt forti-disconnect.scpt
+osacompile -o /tmp/check3.scpt forti-status.scpt
 
 # Run all lint checks that CI and pre-commit enforce
 pre-commit run --all-files
@@ -41,7 +45,9 @@ Full manual testing requires FortiClient installed with profiles already configu
 
 ## Exit-code contract
 
-Both scripts exit 0 on success (including "already connected" / "not connected") and 1 on failure. `osascript` maps **every** script error to exit status 1 — distinct exit codes are impossible without abandoning the `osascript forti.scpt` invocation form, so don't try. Instead, each failure mode raises `error "message" number N` and the number lands in the stderr text (`... (N)`). The number assignments (64 usage, 2 keychain, 3 window/accessibility tree, 4 profile missing, 5 UI element missing, 6 connect/auto-disconnect timeout, 7 externally started connect finished on a different profile, 8 FortiClient not installed) are documented in each script's header and in MANUAL.md — keep all three in sync when adding failure modes.
+`forti.scpt` / `forti-disconnect.scpt` exit 0 on success (including "already connected" / "not connected") and 1 on failure. `osascript` maps **every** script error to exit status 1 — distinct exit codes are impossible without abandoning the `osascript forti.scpt` invocation form, so don't try. Instead, each failure mode raises `error "message" number N` and the number lands in the stderr text (`... (N)`). The number assignments (64 usage, 2 keychain, 3 window/accessibility tree, 4 profile missing, 5 UI element missing, 6 connect/auto-disconnect timeout, 7 externally started connect finished on a different profile, 8 FortiClient not installed) are documented in each script's header and in MANUAL.md — keep all three in sync when adding failure modes.
+
+`forti-status.scpt` inverts the contract: exit 0 means **connected** (the profile name is on stdout), exit 1 means **not connected or undeterminable**. Since osascript can only exit non-zero via an error, the ordinary "nothing connected" result is raised as `error … number 1` (silent stdout), and `number 3` distinguishes "FortiClient is running but its accessibility tree could not be read". The exit code, not stdout emptiness, is the authoritative connected/not signal. Same sync rule (header + MANUAL.md) applies.
 
 ## File naming quirk
 
