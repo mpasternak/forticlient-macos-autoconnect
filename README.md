@@ -1,5 +1,7 @@
 # forticlient-macos-autoconnect
 
+[![CI](https://github.com/mpasternak/forticlient-macos-autoconnect/actions/workflows/ci.yml/badge.svg)](https://github.com/mpasternak/forticlient-macos-autoconnect/actions/workflows/ci.yml)
+
 Connect to your FortiClient VPN on macOS with a single terminal command — no
 clicking through the FortiClient window, no typing passwords.
 
