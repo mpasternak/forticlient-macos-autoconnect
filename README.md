@@ -10,6 +10,13 @@ FortiClient app for you: they pick your VPN profile, fill in your username and
 password (stored safely in the macOS Keychain), press **Connect**, and tell
 you when the tunnel is up.
 
+## Disclaimer
+
+This is an independent, community-made tool. The author and this software are
+in no way affiliated with, endorsed by, or sponsored by Fortinet, Inc.
+*FortiClient* and *Fortinet* are trademarks of Fortinet, Inc. Use at your own
+risk.
+
 ## What you need
 
 - FortiClient (the free "VPN only" version is fine) installed, with your VPN
@@ -59,13 +66,6 @@ alias vpn-down='osascript ~/bin/forti-disconnect.scpt'
 See **[MANUAL.md](MANUAL.md)** — it covers Keychain management in detail,
 exit codes for scripting, a troubleshooting table for every known failure,
 and the bundled diagnostic script.
-
-## Disclaimer
-
-This is an independent, community-made tool. The author and this software are
-in no way affiliated with, endorsed by, or sponsored by Fortinet, Inc.
-*FortiClient* and *Fortinet* are trademarks of Fortinet, Inc. Use at your own
-risk.
 
 ## License
 

@@ -138,6 +138,30 @@ Clicks **Disconnect**, waits up to ~30 s for the button to flip back to
 **Connect**, hides the window and posts a notification. If no tunnel is up,
 it reports "Not connected" and exits successfully.
 
+## Console progress
+
+Both scripts narrate their steps on **stderr** (via AppleScript `log`) and
+show a tqdm-style overwriting progress bar during the connect/disconnect
+waits:
+
+```
+* credentials for 'WorkVPN' loaded from the Keychain
+* activating FortiClient
+* profile 'WorkVPN' selected
+* credentials filled, Connect clicked
+connecting [########------------] 12/30 s
+```
+
+The bar is written directly to your terminal (`/dev/tty`), not to
+stdout/stderr — redirections and command substitutions stay clean, and the
+bar still shows live even when stderr is captured (as the test suite
+does). Without a controlling terminal (launchd, cron) the bar is skipped
+automatically; the `log` step lines remain on stderr.
+
+Implementation note: the bar cannot use `printf ... >&2` inside
+`do shell script`, because `do shell script` discards stderr on success
+(it only surfaces in the error message on failure) — hence `/dev/tty`.
+
 ## Exit codes
 
 Both scripts exit **0 on success** and **1 on any failure** — suitable for
@@ -171,7 +195,9 @@ forti.scpt: execution error: No Keychain item with service name 'forti-vpn-X' ..
 | 6 | Still connected after ~30 s                                         |
 
 To extract the error number in a shell script, parse the trailing `(N)` from
-stderr.
+stderr. Progress lines also land on stderr, but the `execution error` line
+is always the **last** one — parse the final line only (as
+`tests/manual-test.sh` does).
 
 ## Testing
 
@@ -183,13 +209,13 @@ tests/manual-test.sh --safe-only    # only the GUI-free checks
 ```
 
 The safe tests (syntax compilation, usage error, missing Keychain item) run
-unconditionally. The GUI tests connect and disconnect **real VPN tunnels**
-— each one explains what it is about to do and waits for Enter (`s` skips
-it), so you can run any subset. Covered scenarios: disconnect from any
-state, fresh connect, already-connected fast path, automatic profile
-switch in both directions, and disconnect-when-not-connected. Each test
-verifies the exit status and, for failures, the `(N)` error number on
-stderr.
+unconditionally. The GUI tests connect and disconnect **real VPN tunnels**:
+the suite asks for confirmation once, then runs the whole GUI sequence
+unattended (~3–5 minutes), starting with a cleanup disconnect. Covered
+scenarios: disconnect from any state, fresh connect, already-connected
+fast path, automatic profile switch in both directions, and
+disconnect-when-not-connected. Each test verifies the exit status and,
+for failures, the `(N)` error number on stderr.
 
 The two profiles used default to `IHIT` and `IPIS`; override them with
 `FORTI_TEST_PROFILE_A` / `FORTI_TEST_PROFILE_B`. Both must exist in

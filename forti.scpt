@@ -56,6 +56,41 @@ on activeProfileName(elems)
 	return ""
 end activeProfileName
 
+-- Console progress. Step lines use `log` (osascript sends them to stderr).
+-- The overwriting bar must go straight to /dev/tty: `do shell script`
+-- DISCARDS stderr on success (TN2065), so "printf ... >&2" outputs nothing.
+-- /dev/tty also keeps redirected stdout/stderr clean; with no controlling
+-- terminal (launchd, cron) the printf fails and the bar is skipped.
+on emitProgress(lineText)
+	try
+		do shell script "printf '\\r%-60s' " & quoted form of lineText & " > /dev/tty"
+	on error
+		-- no controlling terminal — the `log` lines still carry the progress
+	end try
+end emitProgress
+
+on endProgress(lineText)
+	try
+		do shell script "printf '\\r%-60s\\n' " & quoted form of lineText & " > /dev/tty"
+	on error
+		-- no controlling terminal — the `log` lines still carry the progress
+	end try
+end endProgress
+
+-- tqdm-style bar:  label [########------------] 12/30 s
+on progressBar(labelText, elapsed, total)
+	set barWidth to 20
+	set filledCount to (barWidth * elapsed) div total
+	set theBar to ""
+	repeat filledCount times
+		set theBar to theBar & "#"
+	end repeat
+	repeat (barWidth - filledCount) times
+		set theBar to theBar & "-"
+	end repeat
+	my emitProgress(labelText & " [" & theBar & "] " & elapsed & "/" & total & " s")
+end progressBar
+
 on run argv
 	if (count of argv) is 0 then
 		error "Usage: osascript forti.scpt <ProfileName> [username]" number 64
@@ -81,6 +116,8 @@ on run argv
 		end if
 	end if
 
+	log "* credentials for '" & profileName & "' loaded from the Keychain"
+	log "* activating FortiClient"
 	try
 		tell application "FortiClient" to activate
 	on error
@@ -123,17 +160,21 @@ on run argv
 					-- fully connected — is it the *requested* tunnel?
 					set activeProfile to my activeProfileName(elems)
 					if (activeProfile is "") or (activeProfile is profileName) then
+						log "* already connected to '" & profileName & "'"
 						set visible to false
 						display notification "Already connected: " & profileName with title "FortiClient VPN" sound name "Glass"
 						return
 					end if
 					-- a different profile is up: disconnect it automatically and
 					-- fall through to the normal connect flow below
+					log "* connected to '" & activeProfile & "' — disconnecting first"
 					display notification "Switching: " & activeProfile & " → " & profileName with title "FortiClient VPN"
 					click disconnectBtn
 					set formBack to false
-					repeat 15 times
+					my progressBar("disconnecting", 0, 30)
+					repeat with i from 1 to 15
 						delay 2
+						my progressBar("disconnecting", i * 2, 30)
 						set elems to entire contents of window 1
 						if my findElement(elems, "AXButton", "Connect") is not missing value then
 							set formBack to true
@@ -141,11 +182,14 @@ on run argv
 						end if
 					end repeat
 					if not formBack then
+						my endProgress("disconnecting: timed out")
 						error "Auto-disconnect from '" & activeProfile & "' did not complete within ~30 s; not connecting to '" & profileName & "'." number 6
 					end if
+					my endProgress("disconnecting: done")
 				else
 					-- a connect started outside this script is still running —
 					-- don't touch the form, just wait for the outcome below
+					log "* a connection attempt is already in progress — waiting for it"
 					set connectInProgress to true
 				end if
 			end if
@@ -205,6 +249,7 @@ on run argv
 					-- the web view may have re-rendered after the profile switch
 					set elems to entire contents of window 1
 				end if
+				log "* profile '" & profileName & "' selected"
 
 				set userFieldFound to false
 				set passFieldFound to false
@@ -233,6 +278,7 @@ on run argv
 					error "Button 'Connect' not found — run forti-debug.scpt to inspect the real element names." number 5
 				end if
 				click connectBtn
+				log "* credentials filled, Connect clicked"
 			end if
 		end tell
 	end tell
@@ -242,8 +288,10 @@ on run argv
 	-- and FortiClient re-shows the window itself when the connection completes;
 	-- the status labels appear only in the truly connected view.
 	set connected to false
-	repeat 15 times
+	my progressBar("connecting", 0, 30)
+	repeat with i from 1 to 15
 		delay 2
+		my progressBar("connecting", i * 2, 30)
 		tell application "System Events"
 			tell process "FortiClient"
 				set elems to entire contents of window 1
@@ -254,6 +302,11 @@ on run argv
 			exit repeat
 		end if
 	end repeat
+	if connected then
+		my endProgress("connecting: tunnel is up")
+	else
+		my endProgress("connecting: timed out")
+	end if
 
 	if connected and connectInProgress then
 		-- the attempt we waited for was started outside this script — make
@@ -265,6 +318,7 @@ on run argv
 	end if
 
 	if connected then
+		log "Connected: " & profileName
 		tell application "System Events" to set visible of process "FortiClient" to false
 		display notification "Connected: " & profileName with title "FortiClient VPN" sound name "Glass"
 	else

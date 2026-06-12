@@ -61,6 +61,7 @@ Both scripts exit 0 on success (including "already connected" / "not connected")
 - In `forti.scpt`, the Keychain lookup happens **before** the GUI is touched so a missing item fails fast; the password (`-w`) is fetched first because the username's awk pipeline masks a failing `security` (the pipeline exits with awk's status).
 - On a cold launch the FortiClient window can take seconds to appear, so `forti.scpt` polls for it (20 × 0.5 s, error 3 on timeout) instead of using a blind delay — keep this loop; don't replace it with a fixed `delay`.
 - Hard-coded `delay` values throughout are timing-dependent workarounds, not arbitrary; MANUAL.md's debugging table documents which ones to increase for which failure mode.
+- Console progress: step lines use `log` (osascript sends them to stderr); the tqdm-style bar is written to **`/dev/tty`**, NOT `>&2`, because `do shell script` **discards stderr on success** (TN2065) — a `printf ... >&2` inside it outputs nothing. No-terminal contexts (launchd/cron) make the printf fail; that error is deliberately swallowed. Error messages must stay the **last** stderr line (scripts raise errors only after `endProgress`), since consumers parse the trailing `(N)` from the final line.
 
 ## Docs maintenance
 

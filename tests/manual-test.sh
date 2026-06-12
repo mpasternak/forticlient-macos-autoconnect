@@ -3,10 +3,11 @@
 # forti-disconnect.scpt.
 #
 # The GUI tests drive the REAL FortiClient app and connect/disconnect REAL
-# VPN tunnels — run this locally and attended, with FortiClient installed,
-# both test profiles configured in its GUI, Keychain items present, and
-# Accessibility permission granted to your terminal. Safe tests (no GUI)
-# always run; each GUI test asks for confirmation and can be skipped.
+# VPN tunnels — run this locally, with FortiClient installed, both test
+# profiles configured in its GUI, Keychain items present, and Accessibility
+# permission granted to your terminal. Safe tests (no GUI) always run; the
+# GUI section asks for confirmation ONCE and then runs unattended
+# (~3-5 minutes), starting with a cleanup disconnect.
 #
 # Usage:
 #   tests/manual-test.sh                # full interactive suite
@@ -56,21 +57,13 @@ run_and_check() {
     rm -f "$stderr_file"
 }
 
-# gui_test <prompt> <desc> <expected-exit> <expected-errnum|-> <cmd...>
-# Asks before running; "s" (or --safe-only) skips.
+# gui_test <desc> <expected-exit> <expected-errnum|-> <cmd...>
+# Runs only when the GUI section was confirmed at the start.
+GUI_ENABLED=0
 gui_test() {
-    local prompt="$1"
-    shift
-    if [[ "$SAFE_ONLY" -eq 1 ]]; then
+    if [[ "$GUI_ENABLED" -eq 0 ]]; then
         echo
         echo "-- $1"
-        echo "   SKIP  (--safe-only)"
-        SKIP=$((SKIP + 1))
-        return
-    fi
-    echo
-    read -r -p ">> $prompt -- Enter to run, [s]kip: " ans
-    if [[ "$ans" == [sS] ]]; then
         echo "   SKIP"
         SKIP=$((SKIP + 1))
         return
@@ -110,32 +103,36 @@ run_and_check "missing Keychain item (2)" \
 echo
 echo "=== GUI tests ==="
 
-gui_test "Ensure a clean start: disconnect whatever is connected (~5-35 s)" \
-    "disconnect from any state exits 0" \
+if [[ "$SAFE_ONLY" -eq 1 ]]; then
+    echo "(skipped: --safe-only)"
+else
+    echo
+    echo "The GUI tests now run UNATTENDED (~3-5 min): cleanup disconnect,"
+    echo "connect $PROFILE_A, already-connected check, auto-switch to $PROFILE_B"
+    echo "and back, disconnect, disconnect-again."
+    read -r -p ">> Press Enter to run them all, or [s] to skip: " ans
+    [[ "$ans" == [sS] ]] || GUI_ENABLED=1
+fi
+
+gui_test "disconnect from any state exits 0 (cleanup)" \
     0 - osascript forti-disconnect.scpt
 
-gui_test "Connect to $PROFILE_A from disconnected (~10-40 s)" \
-    "connect $PROFILE_A" \
+gui_test "connect $PROFILE_A" \
     0 - osascript forti.scpt "$PROFILE_A"
 
-gui_test "Run the same connect again -- must report 'already connected' quickly" \
-    "already connected to $PROFILE_A" \
+gui_test "already connected to $PROFILE_A (fast path)" \
     0 - osascript forti.scpt "$PROFILE_A"
 
-gui_test "Request $PROFILE_B while connected to $PROFILE_A -- must auto-disconnect and switch (~30-80 s)" \
-    "auto-switch $PROFILE_A -> $PROFILE_B" \
+gui_test "auto-switch $PROFILE_A -> $PROFILE_B" \
     0 - osascript forti.scpt "$PROFILE_B"
 
-gui_test "Switch back to $PROFILE_A the same way (~30-80 s)" \
-    "auto-switch $PROFILE_B -> $PROFILE_A" \
+gui_test "auto-switch $PROFILE_B -> $PROFILE_A" \
     0 - osascript forti.scpt "$PROFILE_A"
 
-gui_test "Disconnect the active tunnel (~5-35 s)" \
-    "disconnect after connect" \
+gui_test "disconnect after connect" \
     0 - osascript forti-disconnect.scpt
 
-gui_test "Disconnect again while nothing is connected -- still exit 0" \
-    "disconnect when not connected" \
+gui_test "disconnect when not connected" \
     0 - osascript forti-disconnect.scpt
 
 echo

@@ -14,7 +14,43 @@
 --       (accessibility tree not exposed?)
 --    6  still connected after ~30 s
 
+-- Console progress. Step lines use `log` (osascript sends them to stderr).
+-- The overwriting bar must go straight to /dev/tty: `do shell script`
+-- DISCARDS stderr on success (TN2065), so "printf ... >&2" outputs nothing.
+-- /dev/tty also keeps redirected stdout/stderr clean; with no controlling
+-- terminal (launchd, cron) the printf fails and the bar is skipped.
+on emitProgress(lineText)
+	try
+		do shell script "printf '\\r%-60s' " & quoted form of lineText & " > /dev/tty"
+	on error
+		-- no controlling terminal — the `log` lines still carry the progress
+	end try
+end emitProgress
+
+on endProgress(lineText)
+	try
+		do shell script "printf '\\r%-60s\\n' " & quoted form of lineText & " > /dev/tty"
+	on error
+		-- no controlling terminal — the `log` lines still carry the progress
+	end try
+end endProgress
+
+-- tqdm-style bar:  label [########------------] 12/30 s
+on progressBar(labelText, elapsed, total)
+	set barWidth to 20
+	set filledCount to (barWidth * elapsed) div total
+	set theBar to ""
+	repeat filledCount times
+		set theBar to theBar & "#"
+	end repeat
+	repeat (barWidth - filledCount) times
+		set theBar to theBar & "-"
+	end repeat
+	my emitProgress(labelText & " [" & theBar & "] " & elapsed & "/" & total & " s")
+end progressBar
+
 on run argv
+	log "* activating FortiClient"
 	tell application "FortiClient" to activate
 	delay 1.5
 
@@ -47,6 +83,7 @@ on run argv
 			end repeat
 
 			if alreadyDisconnected and not disconnectClicked then
+				log "* not connected — nothing to disconnect"
 				set visible to false
 				display notification "Not connected — nothing to disconnect" with title "FortiClient VPN" sound name "Glass"
 				return
@@ -54,13 +91,16 @@ on run argv
 			if not disconnectClicked then
 				error "Neither 'Disconnect' nor 'Connect' button found — the accessibility tree is probably not exposed. Run forti-debug.scpt and see MANUAL.md." number 3
 			end if
+			log "* Disconnect clicked"
 		end tell
 	end tell
 
 	-- wait up to ~30 s for the button to flip back to "Connect"
 	set disconnected to false
-	repeat 15 times
+	my progressBar("disconnecting", 0, 30)
+	repeat with i from 1 to 15
 		delay 2
+		my progressBar("disconnecting", i * 2, 30)
 		tell application "System Events"
 			tell process "FortiClient"
 				set elems to entire contents of window 1
@@ -78,9 +118,12 @@ on run argv
 	end repeat
 
 	if disconnected then
+		my endProgress("disconnecting: done")
+		log "Disconnected"
 		tell application "System Events" to set visible of process "FortiClient" to false
 		display notification "Disconnected" with title "FortiClient VPN" sound name "Glass"
 	else
+		my endProgress("disconnecting: timed out")
 		display notification "Disconnect failed" with title "FortiClient VPN" sound name "Basso"
 		error "Still connected after ~30 s — the tunnel did not come down." number 6
 	end if
