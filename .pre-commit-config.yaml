@@ -18,4 +18,12 @@ repos:
         types: [file]
       - id: shellcheck
         args: [--shell=bash]
-        files: ^(release\.sh|tests/.*\.sh)$
+        files: ^(build\.sh|release\.sh|tests/.*\.sh)$
+  - repo: local
+    hooks:
+      - id: build-scripts-in-sync
+        name: generated .scpt tools match src/ (build.sh --check)
+        entry: ./build.sh --check
+        language: system
+        pass_filenames: false
+        files: ^(src/.*|build\.sh)$

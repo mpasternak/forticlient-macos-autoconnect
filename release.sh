@@ -114,8 +114,9 @@ if git rev-parse -q --verify "refs/tags/$version" >/dev/null 2>&1; then
 	die "tag $version already exists — aborting to avoid clobbering it"
 fi
 
-# 4. release notes — commit subjects since the previous tag
-prev_tag="$(git tag --sort=-version:refname | head -n1 || true)"
+# 4. release notes — commit subjects since the previous tag. Restrict to CalVer
+# tags (vYYYY.MM.DD[.N]) so a stray non-CalVer tag can't become the baseline.
+prev_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n1 || true)"
 if [ -n "$prev_tag" ]; then
 	range="$prev_tag..HEAD"
 	notes_header="Changes since $prev_tag:"

@@ -1,11 +1,30 @@
 #!/bin/bash
-# forti-debug.sh — diagnostic dump of the FortiClient accessibility tree.
+# forti-debug.scpt — diagnostic dump of the FortiClient accessibility tree.
+# (A bash script despite the .scpt extension; it embeds osascript heredocs.)
 #
 # Use this when forti.scpt fails with -1728 (element not found) or behaves
 # unexpectedly. It enables AXManualAccessibility, dumps the UI tree and lists
 # every interactive element the script could target.
 
 set -u
+
+# FortiClient must be installed, or the `tell application "FortiClient" to
+# activate` below pops a "Choose Application" dialog instead of failing.
+forticlient_app=""
+for p in /Applications/FortiClient.app "$HOME/Applications/FortiClient.app"; do
+	if [ -d "$p" ]; then
+		forticlient_app="$p"
+		break
+	fi
+done
+if [ -z "$forticlient_app" ]; then
+	echo "!! FortiClient.app not found in /Applications or ~/Applications."
+	echo "   Install FortiClient before running forti-debug, or edit this check"
+	echo "   if your install lives elsewhere."
+	exit 1
+fi
+echo "Using $forticlient_app"
+echo
 
 echo "=== 1. Activating FortiClient and enabling accessibility tree ==="
 osascript <<'EOF'

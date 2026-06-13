@@ -12,6 +12,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify generated tools are in sync with src/
+        run: ./build.sh --check
       - name: Syntax-check AppleScript files
         run: |
           osacompile -o /tmp/forti.scptd forti.scpt
@@ -22,5 +24,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: shellcheck forti-debug.scpt, release.sh and test suite
-        run: shellcheck --shell=bash forti-debug.scpt release.sh tests/*.sh
+      - name: shellcheck forti-debug.scpt, build.sh, release.sh and test suite
+        run: shellcheck --shell=bash build.sh forti-debug.scpt release.sh tests/*.sh

@@ -12,6 +12,10 @@ see [README.md](README.md).
 | `forti-status.scpt`     | Prints the connected profile name, or nothing    |
 | `forti-debug.scpt`      | Diagnostic dump of the FortiClient UI tree (a bash script, despite the extension) |
 | `release.sh`            | Cuts a CalVer release (git tag + GitHub release) |
+| `build.sh`              | Assembles the `.scpt` tools from `src/` (see [Building](#building)) |
+
+The three `.scpt` tools are **generated** from sources under `src/` by
+`build.sh` — edit `src/`, not the generated files. See [Building](#building).
 
 ## Requirements
 
@@ -107,7 +111,11 @@ What happens:
    "VPN Name" label). On a match it reports "Already connected" and exits
    successfully; on a mismatch it posts a "Switching" notification,
    **disconnects automatically**, waits for the form to come back, and
-   continues with the normal connect flow. If a connection attempt is still
+   continues with the normal connect flow. If the active profile cannot be
+   read at all (a rare tree glitch, retried once), the script treats the
+   tunnel as connected and exits successfully, but leaves the window
+   **visible** so you can confirm the profile yourself rather than silently
+   hiding a connection it cannot identify. If a connection attempt is still
    in progress, the script does not touch the form and simply waits for the
    outcome (step 7); should that attempt turn out to have targeted a
    different profile, the script fails with error 7.
@@ -225,8 +233,11 @@ forti.scpt: execution error: No Keychain item with service name 'forti-vpn-X' ..
 
 | # | Meaning                                                             |
 | - | ------------------------------------------------------------------- |
-| 3 | Neither "Disconnect" nor "Connect" button found                     |
+| 3 | FortiClient window did not appear within 10 s, or neither "Disconnect" nor "Connect" button found (accessibility tree not exposed?) |
 | 6 | Still connected after ~30 s                                         |
+
+(`forti-disconnect.scpt` exits **0** without launching FortiClient when the
+app is not running — if no FortiClient process exists, no tunnel can be up.)
 
 `forti-status.scpt` exits **0** when a tunnel is up (printing the profile
 name to stdout) and **1** otherwise. Because exit 1 is also how it signals the
@@ -242,10 +253,46 @@ A caller that only cares whether a VPN is up should check the exit code (or
 non-empty stdout) and ignore the number; the `(3)` case is worth surfacing
 because it means a setup problem, not "disconnected".
 
+If a tunnel is genuinely up but its profile name cannot be read from the
+connected view, status still exits **0** (connected is connected — the exit
+code is authoritative) with **empty stdout**. A caller capturing the name
+should read empty-stdout-with-exit-0 as "connected, name unknown", distinct
+from the exit-1 "nothing connected" result.
+
 To extract the error number in a shell script, parse the trailing `(N)` from
 stderr. Progress lines also land on stderr, but the `execution error` line
 is always the **last** one — parse the final line only (as
 `tests/manual-test.sh` does).
+
+## Building
+
+The three tools (`forti.scpt`, `forti-disconnect.scpt`, `forti-status.scpt`)
+are **generated** and committed; their sources live under `src/`:
+
+| Path                     | Role                                                |
+| ------------------------ | --------------------------------------------------- |
+| `src/<tool>.applescript` | The tool's header comment and its `on run` handler  |
+| `src/lib/*.applescript`  | Shared handlers: element lookup, the active-profile / connected checks, the progress bar, optional notifications, window polling |
+| `build.sh`               | Inlines each `--#include lib/…` directive into the body and writes the self-contained `<tool>.scpt` at the repo root |
+
+AppleScript has no usable module system for scripts run via `osascript <file>`:
+a script cannot reliably locate a sibling library at run time (`path to me`
+resolves to osascript, not the script), and `osacompile` compiles one file
+without linking shared code. So the shared handlers are kept **once** under
+`src/lib/` and concatenated into each tool at build time. The committed result
+is self-contained, so users still just clone and run.
+
+```bash
+./build.sh           # regenerate the .scpt tools from src/
+./build.sh --check   # verify the committed tools match src/ (prints a diff
+                     # and exits 1 if not) — run by CI and the pre-commit hook
+```
+
+**Edit `src/`, never the generated `.scpt` files** (each carries a "GENERATED"
+banner as its first comment). CI and a pre-commit hook run `./build.sh --check`
+and fail if a committed tool has drifted from its sources, so a forgotten
+rebuild is caught before merge. `forti-debug.scpt` is hand-written (it is bash,
+not AppleScript) and is **not** generated.
 
 ## Testing
 
@@ -336,6 +383,8 @@ Common failures and what they mean:
 | Fields stay empty although the script ran                    | Some web-view fields reject `set value`. Replace the assignment with: `click e`, then `keystroke "a" using command down`, then `keystroke theValue`. |
 | Error `(6)` but the VPN is up                                | The 30 s poll timed out (slow gateway / 2FA prompt). Increase the `repeat 15 times` / `delay 2` values. |
 | Everything worked yesterday, fails after FortiClient restart | Expected — `AXManualAccessibility` resets when the app restarts. The script re-enables it on every run; if you experimented manually, re-run the script rather than relying on a previous state. |
+| Window stays open after a "Connected (… unconfirmed)" notification | The tunnel is up but the active profile could not be read from the connected view (a transient tree glitch, retried once). The script reports success but deliberately leaves the window visible so you can confirm the profile by eye; `osascript forti-status.scpt` or a re-run usually reads it cleanly. |
+| `warning: could not set AXManualAccessibility (…)` on stderr | The accessibility-tree toggle failed (logged, not fatal). If the run then succeeds it was harmless; if it fails with `(3)`/`(5)`, the tree was never exposed — grant Accessibility permission and retry. |
 
 To verify the tunnel independently of the GUI:
 
