@@ -272,7 +272,7 @@ are **generated** and committed; their sources live under `src/`:
 | Path                     | Role                                                |
 | ------------------------ | --------------------------------------------------- |
 | `src/<tool>.applescript` | The tool's header comment and its `on run` handler  |
-| `src/lib/*.applescript`  | Shared handlers: element lookup, the active-profile / connected checks, the progress bar, optional notifications, window polling |
+| `src/lib/*.applescript`  | Shared handlers: element lookup, the active-profile / connected checks, the progress bar, optional notifications, window polling and accessibility-tree polling (`waitForTree`) |
 | `build.sh`               | Inlines each `--#include lib/…` directive into the body and writes the self-contained `<tool>.scpt` at the repo root |
 
 AppleScript has no usable module system for scripts run via `osascript <file>`:
@@ -372,7 +372,7 @@ Common failures and what they mean:
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | `osascript is not allowed assistive access (-25211)` or `(1002)` | The terminal app has no Accessibility permission. Grant it in *System Settings → Privacy & Security → Accessibility*, then restart the terminal. |
 | Error `(3)` — "No FortiClient window appeared within 10 s"   | FortiClient launched but never showed its window (very slow machine, or the app is stuck). Open FortiClient manually once and retry; if it is consistently slow, increase the `repeat 20 times` window-wait loop. |
-| Error `(3)` — popup or buttons not found                     | The accessibility tree is not exposed (the `AXManualAccessibility` call failed or ran too early — increase the `delay`), or the element has a different (e.g. localized) name. Run `forti-debug.scpt` and check the real names. |
+| Error `(3)` — popup or buttons not found                     | The accessibility tree is not exposed (the `AXManualAccessibility` call failed, or the web view did not render within the ~6 s tree-poll — raise the `repeat 20 times` loop in the shared `waitForTree` handler, `src/lib/window.applescript`), or the element has a different (e.g. localized) name. Run `forti-debug.scpt` and check the real names. |
 | Error `(2)` — `security: ... could not be found in the keychain. (44)` | No Keychain item for this profile. Check the service name with `security find-generic-password -s forti-vpn-<ProfileName>` — remember it is case-sensitive — and add the entry as in the Keychain section. |
 | Error `(2)` — "no readable account attribute"                | The item exists but was created without `-a`, or the username contains non-ASCII characters (`security` then prints the account as hex, which the script cannot parse). Delete and re-add the item with `-a <username>`, or pass the username as the second argument. |
 | Error `(4)` — profile is not selected / wrong profile connects | The argument must match the name shown in the dropdown entry. (The Keychain *service name* is the case-sensitive part; AppleScript's own string matching is case-insensitive.) The script tries `menu item … of menu 1 of` the popup, the bare `menu item … of` form, and finally typed-prefix selection (`keystroke profileName` + Enter), and raises (4) only when the dropdown's value still differs afterwards. |

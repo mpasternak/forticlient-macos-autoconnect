@@ -37,22 +37,18 @@ on run argv
 			error "No VPN connected (FortiClient is not running)." number 1
 		end if
 		tell process "FortiClient"
-			-- enable the Chromium web view's accessibility tree without bringing
-			-- the (possibly hidden) window forward — a status query must not
-			-- steal focus. Already set since the live connection; re-setting is
-			-- idempotent and covers an app that was restarted meanwhile.
-			try
-				set value of attribute "AXManualAccessibility" to true
-			on error errMsg
-				log "* warning: could not set AXManualAccessibility (" & errMsg & ") — accessibility tree may be unavailable"
-			end try
-			delay 0.5
+			-- a status query must not steal focus, so we never activate the app
+			-- or bring its (possibly hidden) window forward; nor do we wait for a
+			-- cold launch (no waitForWindow) — no window yet means nothing to read.
 			if (count of windows) is 0 then
 				error "FortiClient is running but exposes no window to read — the accessibility tree is not available (grant Accessibility permission; see MANUAL.md)." number 3
 			end if
-			set elems to entire contents of window 1
 		end tell
 	end tell
+	-- enable the Chromium tree and poll for it to populate (shared handler;
+	-- read-only, so it does not steal focus). Already set during the live
+	-- connection; re-setting is idempotent and covers a restarted app.
+	set elems to my waitForTree()
 
 	-- Fully connected → report the active profile (stdout) and exit 0.
 	if my isConnected(elems) then return my activeProfileName(elems)

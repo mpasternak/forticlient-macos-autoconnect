@@ -69,18 +69,8 @@ on run argv
 	set connectInProgress to false
 	tell application "System Events"
 		tell process "FortiClient"
-			delay 1 -- let the web view render before touching the tree
-			-- FortiClient's UI is an embedded Chromium web view; its accessibility
-			-- tree is hidden until this attribute is set. Resets on app restart,
-			-- so it must run on every invocation.
-			try
-				set value of attribute "AXManualAccessibility" to true
-			on error errMsg
-				log "* warning: could not set AXManualAccessibility (" & errMsg & ") — accessibility tree may be unavailable"
-			end try
-			delay 0.5
-
-			set elems to entire contents of window 1
+			-- enable the Chromium tree and poll for it to populate (see waitForTree)
+			set elems to my waitForTree()
 
 			-- A Disconnect button alone only means a connection attempt is at
 			-- least in progress (it doubles as a cancel while connecting); the
@@ -191,8 +181,10 @@ on run argv
 					delay 0.8
 					-- the web view may have re-rendered after the profile switch
 					set elems to entire contents of window 1
+					log "* profile '" & profileName & "' selected"
+				else
+					log "* profile '" & profileName & "' already selected"
 				end if
-				log "* profile '" & profileName & "' selected"
 
 				set userFieldFound to false
 				set passFieldFound to false

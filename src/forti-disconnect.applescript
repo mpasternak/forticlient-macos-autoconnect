@@ -40,19 +40,8 @@ on run argv
 		error "No FortiClient window appeared within 10 s. Run forti-debug.scpt and see MANUAL.md." number 3
 	end if
 
-	tell application "System Events"
-		tell process "FortiClient"
-			-- Same Chromium web-view workaround as in forti.scpt; resets on app
-			-- restart, so it must run on every invocation.
-			try
-				set value of attribute "AXManualAccessibility" to true
-			on error errMsg
-				log "* warning: could not set AXManualAccessibility (" & errMsg & ") — accessibility tree may be unavailable"
-			end try
-			delay 0.5
-			set elems to entire contents of window 1
-		end tell
-	end tell
+	-- enable the Chromium tree and poll for it to populate (see waitForTree)
+	set elems to my waitForTree()
 
 	set disconnectBtn to my findElement(elems, "AXButton", "Disconnect")
 	if disconnectBtn is missing value then

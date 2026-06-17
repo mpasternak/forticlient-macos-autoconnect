@@ -153,6 +153,42 @@ on safeWindowContents()
 		return {}
 	end try
 end safeWindowContents
+
+-- Enable FortiClient's embedded Chromium accessibility tree, then poll for it
+-- to populate, and return `entire contents of window 1`. Shared by all three
+-- tools so the tree-readiness logic lives in one place.
+--
+-- AXManualAccessibility exposes the web view's tree and RESETS on every app
+-- restart, so it must be set on every invocation. Setting it only *exposes*
+-- the tree; *reading* it (entire contents) is the part that needs the web view
+-- to have rendered — so we poll for that instead of a blind delay, the same
+-- philosophy as waitForWindow. A warm app (already running, profile rendered)
+-- is ready on the first probe, so there is no wasted wait; a cold launch gets
+-- up to ~6 s (20 × 0.3 s). The anchor is the "VPN Name" popup (disconnected /
+-- connecting view) OR the Disconnect button (connected view): either proves
+-- the tree is exposed. Returns the contents once anchored, or the last
+-- (possibly empty) read on timeout — the caller's element lookups then raise
+-- the numbered error 3/5. safeWindowContents keeps a window that momentarily
+-- vanishes from crashing the poll. Read-only: never activates or focuses the
+-- app, so it is safe for the quiet status query too.
+on waitForTree()
+	tell application "System Events"
+		tell process "FortiClient"
+			try
+				set value of attribute "AXManualAccessibility" to true
+			on error errMsg
+				log "* warning: could not set AXManualAccessibility (" & errMsg & ") — accessibility tree may be unavailable"
+			end try
+		end tell
+	end tell
+	set elems to {}
+	repeat 20 times
+		set elems to my safeWindowContents()
+		if (my findElement(elems, "AXPopUpButton", "VPN Name") is not missing value) or (my findElement(elems, "AXButton", "Disconnect") is not missing value) then return elems
+		delay 0.3
+	end repeat
+	return elems
+end waitForTree
 -- ===== end src/lib/window.applescript =====
 
 on run argv
@@ -162,22 +198,18 @@ on run argv
 			error "No VPN connected (FortiClient is not running)." number 1
 		end if
 		tell process "FortiClient"
-			-- enable the Chromium web view's accessibility tree without bringing
-			-- the (possibly hidden) window forward — a status query must not
-			-- steal focus. Already set since the live connection; re-setting is
-			-- idempotent and covers an app that was restarted meanwhile.
-			try
-				set value of attribute "AXManualAccessibility" to true
-			on error errMsg
-				log "* warning: could not set AXManualAccessibility (" & errMsg & ") — accessibility tree may be unavailable"
-			end try
-			delay 0.5
+			-- a status query must not steal focus, so we never activate the app
+			-- or bring its (possibly hidden) window forward; nor do we wait for a
+			-- cold launch (no waitForWindow) — no window yet means nothing to read.
 			if (count of windows) is 0 then
 				error "FortiClient is running but exposes no window to read — the accessibility tree is not available (grant Accessibility permission; see MANUAL.md)." number 3
 			end if
-			set elems to entire contents of window 1
 		end tell
 	end tell
+	-- enable the Chromium tree and poll for it to populate (shared handler;
+	-- read-only, so it does not steal focus). Already set during the live
+	-- connection; re-setting is idempotent and covers a restarted app.
+	set elems to my waitForTree()
 
 	-- Fully connected → report the active profile (stdout) and exit 0.
 	if my isConnected(elems) then return my activeProfileName(elems)
