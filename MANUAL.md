@@ -272,7 +272,7 @@ are **generated** and committed; their sources live under `src/`:
 | Path                     | Role                                                |
 | ------------------------ | --------------------------------------------------- |
 | `src/<tool>.applescript` | The tool's header comment and its `on run` handler  |
-| `src/lib/*.applescript`  | Shared handlers: element lookup, the active-profile / connected checks, the progress bar, optional notifications, window polling and accessibility-tree polling (`waitForTree`) |
+| `src/lib/*.applescript`  | Shared handlers: tree indexing (`buildIndex`) + element lookup, the active-profile / connected checks, the progress bar, optional notifications, window polling and accessibility-tree polling (`waitForTree`) |
 | `build.sh`               | Inlines each `--#include lib/…` directive into the body and writes the self-contained `<tool>.scpt` at the repo root |
 
 AppleScript has no usable module system for scripts run via `osascript <file>`:
@@ -399,6 +399,15 @@ FortiClient 7.x renders its UI in an embedded Chromium view. Chromium-based
 apps expose their accessibility tree only on demand; setting the
 `AXManualAccessibility` attribute on the application element switches it on,
 after which the form controls become visible to AppleScript's *System
-Events*. The scripts then locate elements by role and name with a recursive
-`entire contents` search, so they are independent of window position and of
-the (deeply nested, version-dependent) group hierarchy.
+Events*. The scripts then locate elements by role and name (not by window
+position or the deeply nested, version-dependent group hierarchy).
+
+Reading `role`/`name` off a System Events element is one Apple Event that
+re-resolves a deeply nested Chromium specifier (~17 ms each), so the lookup is
+done in two stages: `buildIndex` (`src/lib/find-element.applescript`) walks
+`entire contents of window 1` **once**, capturing every element's reference,
+role, and (for the looked-up roles) name into parallel lists, and `findElement`
+then matches that index **in memory** with zero Apple Events. The fetch itself
+is cheap (~40 ms); paying the per-element reads once instead of once per lookup
+is what keeps the connect flow fast (it used to re-walk the live tree on every
+`findElement`/`isConnected`/fill pass — several seconds total).

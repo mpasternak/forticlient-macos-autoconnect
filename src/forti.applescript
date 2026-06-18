@@ -81,7 +81,7 @@ on run argv
 				if activeProfile is "" then
 					-- the connected view may still be rendering: read once more
 					delay 0.8
-					set elems to entire contents of window 1
+					set elems to my buildIndex(entire contents of window 1)
 					set activeProfile to my activeProfileName(elems)
 				end if
 				if activeProfile is profileName then
@@ -180,7 +180,7 @@ on run argv
 					end if
 					delay 0.8
 					-- the web view may have re-rendered after the profile switch
-					set elems to entire contents of window 1
+					set elems to my buildIndex(entire contents of window 1)
 					log "* profile '" & profileName & "' selected"
 				else
 					log "* profile '" & profileName & "' already selected"
@@ -188,18 +188,21 @@ on run argv
 
 				set userFieldFound to false
 				set passFieldFound to false
-				repeat with e in elems
-					try
-						if role of e is "AXTextField" then
-							if name of e is "Username" then
-								set value of e to vpnUser
-								set userFieldFound to true
-							else if name of e is "Password" then
-								set value of e to vpnPass
-								set passFieldFound to true
-							end if
+				set roleList to elemRoles of elems
+				set nameList to elemNames of elems
+				set refList to elemRefs of elems
+				repeat with i from 1 to count of roleList
+					if item i of roleList is "AXTextField" then
+						if item i of nameList is "Username" then
+							set value of (item i of refList) to vpnUser
+							set userFieldFound to true
+						else if item i of nameList is "Password" then
+							set value of (item i of refList) to vpnPass
+							set passFieldFound to true
 						end if
-					end try
+						-- both fields filled: stop, no need to scan the rest
+						if userFieldFound and passFieldFound then exit repeat
+					end if
 				end repeat
 				if not userFieldFound then
 					error "Text field 'Username' not found — run forti-debug.scpt to inspect the real element names." number 5

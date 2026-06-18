@@ -28,44 +28,87 @@
 -- is connected; the exit code is authoritative) — stdout is then empty.
 
 -- ===== begin src/lib/find-element.applescript =====
--- lib/find-element.applescript — recursive UI-tree lookup shared by the tools.
+-- lib/find-element.applescript — UI-tree indexing + lookup shared by the tools.
+--
+-- Reading `role`/`name` off a System Events element is one Apple Event that
+-- re-resolves a deeply-nested Chromium accessibility specifier (~17 ms each),
+-- whereas fetching `entire contents of window 1` is cheap (~40 ms). Walking the
+-- live tree once per lookup therefore cost ~1 s a pass, and the connect flow ran
+-- several passes (isConnected alone is two). buildIndex pays that traversal
+-- ONCE, capturing every element's reference plus its role and (only for the
+-- roles we ever look up) its name into parallel lists; findElement then matches
+-- in memory with ZERO Apple Events. Callers pass the index record everywhere the
+-- raw `entire contents` list used to flow.
 
--- Return the first element of `elems` with the given role and name, or
--- `missing value`. The bare try swallows errors from probing elements that
--- have no name attribute — actual lookup failure is the missing value result.
-on findElement(elems, theRole, theName)
+-- One traversal of `elems` (an `entire contents` reference list) into an index
+-- record of parallel lists in document order: {elemRefs, elemRoles, elemNames}.
+-- `name` is read only for the roles any lookup cares about — groups/images are
+-- never matched by name, so skipping them roughly halves the Apple Events.
+on buildIndex(elems)
+	set rolesOfInterest to {"AXTextField", "AXButton", "AXPopUpButton", "AXStaticText"}
+	set roleList to {}
+	set nameList to {}
 	tell application "System Events"
 		repeat with e in elems
+			set thisRole to ""
+			-- bare try: probing an element that lacks a role attribute is not an
+			-- error condition, it just leaves this slot's role blank (unmatched).
 			try
-				if (role of e is theRole) and (name of e is theName) then return contents of e
+				set thisRole to (role of e)
 			end try
+			set end of roleList to thisRole
+			set thisName to ""
+			if rolesOfInterest contains thisRole then
+				try
+					set thisName to (name of e)
+				end try
+			end if
+			set end of nameList to thisName
 		end repeat
 	end tell
+	return {elemRefs:elems, elemRoles:roleList, elemNames:nameList}
+end buildIndex
+
+-- The empty index — returned by safeWindowContents when window 1 momentarily
+-- vanishes, so lookups degrade to `missing value` instead of crashing a poll.
+on emptyIndex()
+	return {elemRefs:{}, elemRoles:{}, elemNames:{}}
+end emptyIndex
+
+-- First element of the index with the given role and name, or `missing value`.
+-- Pure in-memory list scan (no Apple Events); returns the live element reference
+-- so the caller can click it or set its value.
+on findElement(idx, theRole, theName)
+	set roleList to elemRoles of idx
+	set nameList to elemNames of idx
+	repeat with i from 1 to count of roleList
+		if (item i of roleList is theRole) and (item i of nameList is theName) then
+			return item i of (elemRefs of idx)
+		end if
+	end repeat
 	return missing value
 end findElement
 -- ===== end src/lib/find-element.applescript =====
 -- ===== begin src/lib/active-profile.applescript =====
 -- lib/active-profile.applescript — read the connected profile name.
 
--- In the *connected* view the form is gone and the active profile is shown
--- as the static text that follows the "VPN Name" label static text in
--- document order ("entire contents" returns elements in that order).
--- Returns "" when it cannot be determined.
-on activeProfileName(elems)
-	tell application "System Events"
-		set seenLabel to false
-		repeat with e in elems
-			try
-				if role of e is "AXStaticText" then
-					if seenLabel then
-						return name of e
-					else if name of e is "VPN Name" then
-						set seenLabel to true
-					end if
-				end if
-			end try
-		end repeat
-	end tell
+-- In the *connected* view the form is gone and the active profile is shown as
+-- the static text that follows the "VPN Name" label static text in document
+-- order. The index (see buildIndex) preserves that order, so this walks the
+-- in-memory role/name lists — no Apple Events. Returns "" when undeterminable.
+on activeProfileName(idx)
+	set roleList to elemRoles of idx
+	set nameList to elemNames of idx
+	set seenLabel to false
+	repeat with i from 1 to count of roleList
+		if item i of roleList is "AXStaticText" then
+			if seenLabel then
+				return item i of nameList
+			else if item i of nameList is "VPN Name" then
+				set seenLabel to true
+			end if
+		end if
+	end repeat
 	return ""
 end activeProfileName
 -- ===== end src/lib/active-profile.applescript =====
@@ -73,12 +116,12 @@ end activeProfileName
 -- lib/is-connected.applescript — the single "fully connected" criterion.
 -- Depends on findElement (lib/find-element.applescript).
 
--- True when `elems` shows a fully-up tunnel: a Disconnect button *and* a
--- Duration status label. The Disconnect button alone only means a connect is
+-- True when the index `idx` shows a fully-up tunnel: a Disconnect button *and*
+-- a Duration status label. The Disconnect button alone only means a connect is
 -- in progress (it doubles as a cancel then). Keeping this in one place means
 -- forti.scpt and forti-status.scpt cannot drift on what "connected" means.
-on isConnected(elems)
-	return (my findElement(elems, "AXButton", "Disconnect") is not missing value) and (my findElement(elems, "AXStaticText", "Duration") is not missing value)
+on isConnected(idx)
+	return (my findElement(idx, "AXButton", "Disconnect") is not missing value) and (my findElement(idx, "AXStaticText", "Duration") is not missing value)
 end isConnected
 -- ===== end src/lib/is-connected.applescript =====
 -- ===== begin src/lib/progress.applescript =====
@@ -136,27 +179,29 @@ on waitForWindow()
 	return false
 end waitForWindow
 
--- `entire contents of window 1`, tolerant of the window momentarily
--- disappearing — FortiClient hides and re-shows it while (dis)connecting.
--- Returns {} on error so poll loops keep polling to a controlled, numbered
--- timeout instead of crashing on a raw AppleScript error.
+-- A freshly-built index (see buildIndex) of `entire contents of window 1`,
+-- tolerant of the window momentarily disappearing — FortiClient hides and
+-- re-shows it while (dis)connecting. Returns the empty index on error so poll
+-- loops keep polling to a controlled, numbered timeout instead of crashing on a
+-- raw AppleScript error. The fetch is cheap; the one-pass index it pays for is
+-- what makes every subsequent lookup against this snapshot free.
 on safeWindowContents()
 	try
-		tell application "System Events"
-			tell process "FortiClient"
-				return entire contents of window 1
-			end tell
+		tell application "System Events" to tell process "FortiClient"
+			set rawElems to entire contents of window 1
 		end tell
+		return my buildIndex(rawElems)
 	on error
 		-- expected: the window is briefly absent mid-(dis)connect. The caller's
 		-- poll timeout (error 6) is the real failure path, not this read.
-		return {}
+		return my emptyIndex()
 	end try
 end safeWindowContents
 
 -- Enable FortiClient's embedded Chromium accessibility tree, then poll for it
--- to populate, and return `entire contents of window 1`. Shared by all three
--- tools so the tree-readiness logic lives in one place.
+-- to populate, and return the indexed tree (see buildIndex) — the snapshot every
+-- subsequent lookup runs against. Shared by all three tools so the tree-readiness
+-- logic lives in one place.
 --
 -- AXManualAccessibility exposes the web view's tree and RESETS on every app
 -- restart, so it must be set on every invocation. Setting it only *exposes*
@@ -181,13 +226,13 @@ on waitForTree()
 			end try
 		end tell
 	end tell
-	set elems to {}
+	set idx to my emptyIndex()
 	repeat 20 times
-		set elems to my safeWindowContents()
-		if (my findElement(elems, "AXPopUpButton", "VPN Name") is not missing value) or (my findElement(elems, "AXButton", "Disconnect") is not missing value) then return elems
+		set idx to my safeWindowContents()
+		if (my findElement(idx, "AXPopUpButton", "VPN Name") is not missing value) or (my findElement(idx, "AXButton", "Disconnect") is not missing value) then return idx
 		delay 0.3
 	end repeat
-	return elems
+	return idx
 end waitForTree
 -- ===== end src/lib/window.applescript =====
 
