@@ -15,27 +15,29 @@ on waitForWindow()
 	return false
 end waitForWindow
 
--- `entire contents of window 1`, tolerant of the window momentarily
--- disappearing — FortiClient hides and re-shows it while (dis)connecting.
--- Returns {} on error so poll loops keep polling to a controlled, numbered
--- timeout instead of crashing on a raw AppleScript error.
+-- A freshly-built index (see buildIndex) of `entire contents of window 1`,
+-- tolerant of the window momentarily disappearing — FortiClient hides and
+-- re-shows it while (dis)connecting. Returns the empty index on error so poll
+-- loops keep polling to a controlled, numbered timeout instead of crashing on a
+-- raw AppleScript error. The fetch is cheap; the one-pass index it pays for is
+-- what makes every subsequent lookup against this snapshot free.
 on safeWindowContents()
 	try
-		tell application "System Events"
-			tell process "FortiClient"
-				return entire contents of window 1
-			end tell
+		tell application "System Events" to tell process "FortiClient"
+			set rawElems to entire contents of window 1
 		end tell
+		return my buildIndex(rawElems)
 	on error
 		-- expected: the window is briefly absent mid-(dis)connect. The caller's
 		-- poll timeout (error 6) is the real failure path, not this read.
-		return {}
+		return my emptyIndex()
 	end try
 end safeWindowContents
 
 -- Enable FortiClient's embedded Chromium accessibility tree, then poll for it
--- to populate, and return `entire contents of window 1`. Shared by all three
--- tools so the tree-readiness logic lives in one place.
+-- to populate, and return the indexed tree (see buildIndex) — the snapshot every
+-- subsequent lookup runs against. Shared by all three tools so the tree-readiness
+-- logic lives in one place.
 --
 -- AXManualAccessibility exposes the web view's tree and RESETS on every app
 -- restart, so it must be set on every invocation. Setting it only *exposes*
@@ -60,11 +62,11 @@ on waitForTree()
 			end try
 		end tell
 	end tell
-	set elems to {}
+	set idx to my emptyIndex()
 	repeat 20 times
-		set elems to my safeWindowContents()
-		if (my findElement(elems, "AXPopUpButton", "VPN Name") is not missing value) or (my findElement(elems, "AXButton", "Disconnect") is not missing value) then return elems
+		set idx to my safeWindowContents()
+		if (my findElement(idx, "AXPopUpButton", "VPN Name") is not missing value) or (my findElement(idx, "AXButton", "Disconnect") is not missing value) then return idx
 		delay 0.3
 	end repeat
-	return elems
+	return idx
 end waitForTree
