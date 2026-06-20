@@ -1,5 +1,29 @@
 -- lib/window.applescript — FortiClient window helpers shared by the tools.
 
+-- Bring FortiClient up WITHOUT stealing focus, so the tools drive it in the
+-- background. `launch` (unlike `activate`) starts the app — or is a no-op when
+-- it is already running — without bringing it to the front. If a previous run
+-- left the app hidden (we hide it on success with `set visible to false`), we
+-- un-hide it via the AX `visible` attribute, which exposes the window again
+-- without making the process frontmost. Reading the tree, `set value`, and
+-- `click <element>` are all Accessibility actions that work on a background
+-- window, so no focus is needed for the normal flow (only the keystroke
+-- fallback in forti.scpt requires the front, and it grabs focus only then).
+-- Raises error 8 when the app is not installed (the launch fails); callers that
+-- guarantee a running process (forti-disconnect) never reach that path.
+on showInBackground()
+	try
+		tell application "FortiClient" to launch
+	on error
+		error "FortiClient.app not found or failed to launch — is FortiClient installed?" number 8
+	end try
+	tell application "System Events"
+		if exists process "FortiClient" then
+			if not (visible of process "FortiClient") then set visible of process "FortiClient" to true
+		end if
+	end tell
+end showInBackground
+
 -- Poll up to ~10 s (20 × 0.5 s) for FortiClient to show a window; a cold
 -- launch can take seconds. Returns true once a window exists, false on
 -- timeout. Use this instead of a blind delay after activating the app.

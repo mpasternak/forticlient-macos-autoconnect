@@ -7,6 +7,9 @@
 -- "Disconnect", waits for the button to flip back to "Connect", then hides
 -- the FortiClient window and posts a notification. No credentials needed.
 --
+-- Runs entirely in the background — it never brings FortiClient to the front
+-- (it only clicks and reads, which work on a background window).
+--
 -- Exit status: 0 on success (disconnected, or no tunnel was up), 1 on any
 -- failure. osascript maps every script error to exit status 1, so the
 -- specific failure is carried in the stderr message and its error number:
@@ -18,6 +21,10 @@
 --#include lib/progress.applescript
 --#include lib/notify.applescript
 --#include lib/window.applescript
+
+-- Driven entirely in the background: the only actions used here are clicks
+-- (AXPress) and tree reads, none of which need FortiClient on top. No
+-- keystrokes, so the window never has to come to the front.
 
 on run argv
 	-- If FortiClient is not running, no tunnel can be up (same assumption as
@@ -32,9 +39,8 @@ on run argv
 		end if
 	end tell
 
-	log "* activating FortiClient"
-	tell application "FortiClient" to activate
-	tell application "System Events" to tell process "FortiClient" to set frontmost to true
+	log "* bringing up FortiClient in the background"
+	my showInBackground()
 	-- a cold launch can take a few seconds to show the window
 	if not my waitForWindow() then
 		error "No FortiClient window appeared within 10 s. Run forti-debug.scpt and see MANUAL.md." number 3

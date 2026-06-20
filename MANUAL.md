@@ -101,8 +101,12 @@ What happens:
 1. Credentials are read from the Keychain (before the GUI is touched, so a
    missing Keychain item fails fast). When a username is given on the command
    line, the Keychain account attribute is not consulted at all.
-2. FortiClient is activated; the script waits up to 10 s for its window to
-   appear (a cold launch can be slow), then enables the accessibility tree.
+2. FortiClient is brought up **in the background** — `launch`ed (or un-hidden
+   if a previous run hid it), never `activate`d or made frontmost, so it does
+   not steal focus from whatever you are doing. The script waits up to 10 s for
+   its window to appear (a cold launch can be slow), then enables the
+   accessibility tree. Reading the tree, filling fields and clicking buttons
+   are all Accessibility actions that work on a background window.
 3. If the tunnel is already up — a **Disconnect** button together with the
    status labels (**Duration**, **Bytes Received**, **Bytes Sent**); the
    Disconnect button alone only means "connecting", where it doubles as a
@@ -124,19 +128,27 @@ What happens:
    currently-selected menu item fails in FortiClient's web view. Selection
    tries native menu-item addressing (`menu 1`, then the bare form) and
    falls back to typed-prefix selection (typing the name + Enter); success
-   is verified by re-reading the dropdown's value, not by the click.
+   is verified by re-reading the dropdown's value, not by the click. This
+   selection is **the one time the window comes to the front**: the native
+   `<select>` menu only responds to clicks/keystrokes while FortiClient is
+   frontmost (writing the value directly is silently ignored by the web view),
+   so the script grabs focus for the selection and hands it straight back to
+   your app afterward. It only happens on a real profile switch — a
+   same-profile reconnect skips this whole step and never leaves the background.
 5. Username and password are typed into the form.
 6. **Connect** is clicked.
 7. The script polls for up to ~30 s until the **Disconnect** button *and*
    the **Duration** status label are both present. The Disconnect button
    alone is not used as the success signal — FortiClient shows it already
    while connecting; the status labels appear only once the tunnel is
-   actually up. (FortiClient briefly hides and re-shows its window around
-   the moment the connection completes; the script hides it only after the
-   labels appear, so it stays hidden.)
+   actually up. FortiClient **raises its own window to the front** the moment
+   the connection completes; during this poll the script pushes your app back
+   on top every ~0.3 s, so that self-activation flashes for a tick at most
+   instead of staying up until the window is hidden.
 8. On success the FortiClient window is hidden (the app keeps running and
    holds the tunnel) and a "Connected" notification is shown; on failure you
-   get a "Failed" notification and a non-zero exit.
+   get a "Failed" notification and a non-zero exit. You learn the result from
+   the CLI output and the notification — the window never needs to surface.
 
 ## Disconnecting
 
@@ -146,7 +158,9 @@ osascript forti-disconnect.scpt
 
 Clicks **Disconnect**, waits up to ~30 s for the button to flip back to
 **Connect**, hides the window and posts a notification. If no tunnel is up,
-it reports "Not connected" and exits successfully.
+it reports "Not connected" and exits successfully. Runs **entirely in the
+background** — it only clicks and reads (no keystrokes), so it never brings
+FortiClient to the front.
 
 ## Checking status
 
@@ -385,6 +399,7 @@ Common failures and what they mean:
 | Everything worked yesterday, fails after FortiClient restart | Expected — `AXManualAccessibility` resets when the app restarts. The script re-enables it on every run; if you experimented manually, re-run the script rather than relying on a previous state. |
 | Window stays open after a "Connected (… unconfirmed)" notification | The tunnel is up but the active profile could not be read from the connected view (a transient tree glitch, retried once). The script reports success but deliberately leaves the window visible so you can confirm the profile by eye; `osascript forti-status.scpt` or a re-run usually reads it cleanly. |
 | `warning: could not set AXManualAccessibility (…)` on stderr | The accessibility-tree toggle failed (logged, not fatal). If the run then succeeds it was harmless; if it fails with `(3)`/`(5)`, the tree was never exposed — grant Accessibility permission and retry. |
+| FortiClient flashes to the front during a connect | Expected. On a **profile switch** the window must come forward briefly (the native dropdown only takes a selection while frontmost) and focus is handed back right after; on **connect** FortiClient self-raises its window and the script pushes your app back on top within ~0.3 s. A same-profile reconnect and `forti-disconnect.scpt` stay fully in the background. |
 
 To verify the tunnel independently of the GUI:
 

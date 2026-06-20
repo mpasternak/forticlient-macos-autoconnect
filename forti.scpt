@@ -10,6 +10,12 @@
 -- "forti-vpn-<ProfileName>": the account attribute is the VPN username,
 -- the password is the VPN password. See README.md.
 --
+-- Runs in the background without stealing focus. The one exception is a real
+-- profile switch: selecting in the native dropdown only works while FortiClient
+-- is frontmost, so it is brought to the front for that selection alone and then
+-- focus is handed back. Same-profile reconnects and disconnects never leave the
+-- background.
+--
 -- Exit status: 0 on success (connected, or already connected), 1 on any
 -- failure. osascript maps every script error to exit status 1, so the
 -- specific failure is carried in the stderr message and its error number:
@@ -179,6 +185,30 @@ end notifyOptional
 -- ===== begin src/lib/window.applescript =====
 -- lib/window.applescript — FortiClient window helpers shared by the tools.
 
+-- Bring FortiClient up WITHOUT stealing focus, so the tools drive it in the
+-- background. `launch` (unlike `activate`) starts the app — or is a no-op when
+-- it is already running — without bringing it to the front. If a previous run
+-- left the app hidden (we hide it on success with `set visible to false`), we
+-- un-hide it via the AX `visible` attribute, which exposes the window again
+-- without making the process frontmost. Reading the tree, `set value`, and
+-- `click <element>` are all Accessibility actions that work on a background
+-- window, so no focus is needed for the normal flow (only the keystroke
+-- fallback in forti.scpt requires the front, and it grabs focus only then).
+-- Raises error 8 when the app is not installed (the launch fails); callers that
+-- guarantee a running process (forti-disconnect) never reach that path.
+on showInBackground()
+	try
+		tell application "FortiClient" to launch
+	on error
+		error "FortiClient.app not found or failed to launch — is FortiClient installed?" number 8
+	end try
+	tell application "System Events"
+		if exists process "FortiClient" then
+			if not (visible of process "FortiClient") then set visible of process "FortiClient" to true
+		end if
+	end tell
+end showInBackground
+
 -- Poll up to ~10 s (20 × 0.5 s) for FortiClient to show a window; a cold
 -- launch can take seconds. Returns true once a window exists, false on
 -- timeout. Use this instead of a blind delay after activating the app.
@@ -250,12 +280,79 @@ on waitForTree()
 	return idx
 end waitForTree
 -- ===== end src/lib/window.applescript =====
+-- ===== begin src/lib/focus.applescript =====
+-- lib/focus.applescript — momentary foreground for keystroke-only actions.
+--
+-- Almost everything the tools do (read the tree, set field values, click
+-- elements) is an Accessibility action that works on a background window. The
+-- exceptions both involve the native "VPN Name" dropdown: clicking its menu
+-- item and the `keystroke` fallback only act on the frontmost app. These two
+-- handlers bracket that selection — focusFortiClient brings FortiClient to the
+-- front and reports which app was frontmost before, restoreFront hands that
+-- focus straight back — so the app is on top only for the profile switch, then
+-- drops to the background again. Used only by forti.scpt — to bracket the
+-- profile-switch selection (focusFortiClient/restoreFront) and to keep the
+-- window down when FortiClient self-activates on connect (pushBack).
+-- forti-disconnect needs none of this.
+
+-- Make FortiClient frontmost and return the name of the app that was frontmost
+-- beforehand, so restoreFront can give focus back to it.
+on focusFortiClient()
+	tell application "System Events"
+		set prevApp to name of first process whose frontmost is true
+		set frontmost of process "FortiClient" to true
+	end tell
+	return prevApp
+end focusFortiClient
+
+-- Return focus to the app that held it before focusFortiClient. A failure here
+-- is non-fatal (the connect already happened), so it is logged, not swallowed
+-- silently, per the no-silent-error rule.
+on restoreFront(prevApp)
+	if prevApp is "FortiClient" then return -- it was already frontmost; nothing to restore
+	try
+		tell application "System Events" to set frontmost of process prevApp to true
+	on error errMsg
+		log "* could not restore focus to '" & prevApp & "' (" & errMsg & ")"
+	end try
+end restoreFront
+
+-- Keep FortiClient out of the user's way during the connect poll. FortiClient
+-- brings its OWN window to the front when the tunnel comes up; we hide that
+-- window once the poll confirms the connection, but that confirmation is a
+-- coarse (~2 s) check, so without this the window would sit on top until then.
+-- Called every ~0.3 s, pushBack shoves the captured caller app straight back on
+-- top the moment FortiClient self-activates, so the pop lasts a tick at most. A
+-- no-op when nothing was captured, or when FortiClient is not the one in front.
+on pushBack(callerApp)
+	if callerApp is "" or callerApp is "FortiClient" then return
+	tell application "System Events"
+		try
+			if frontmost of process "FortiClient" then set frontmost of process callerApp to true
+		on error
+			-- expected/transient: mid-connect the FortiClient process or callerApp
+			-- can briefly be unaddressable (the same window flicker safeWindowContents
+			-- tolerates). Skipping one push-back is harmless — the next tick retries.
+			-- Deliberately not logged: at ~0.3 s cadence it would only spam.
+		end try
+	end tell
+end pushBack
+-- ===== end src/lib/focus.applescript =====
 
 on run argv
 	if (count of argv) is 0 then
 		error "Usage: osascript forti.scpt <ProfileName> [username]" number 64
 	end if
 	set profileName to item 1 of argv
+
+	-- Remember who has focus now (the terminal that launched us), so the connect
+	-- poll can keep FortiClient from stealing it when it self-activates on connect.
+	set callerApp to ""
+	try
+		tell application "System Events" to set callerApp to name of first process whose frontmost is true
+	on error errMsg
+		log "* could not read the frontmost app (" & errMsg & ") — FortiClient may briefly show on connect"
+	end try
 
 	-- username from the Keychain item's account attribute, password from its
 	-- value. The awk pipe masks a failing `security` (the pipeline's status is
@@ -277,14 +374,10 @@ on run argv
 	end if
 
 	log "* credentials for '" & profileName & "' loaded from the Keychain"
-	log "* activating FortiClient"
-	try
-		tell application "FortiClient" to activate
-	on error
-		error "FortiClient.app not found or failed to launch — is FortiClient installed?" number 8
-	end try
-
-	tell application "System Events" to tell process "FortiClient" to set frontmost to true
+	log "* bringing up FortiClient in the background"
+	-- launch/un-hide without stealing focus (raises error 8 if not installed);
+	-- the whole flow runs in the background except the keystroke fallback below
+	my showInBackground()
 	-- a cold launch can take a few seconds to show the window
 	if not my waitForWindow() then
 		error "No FortiClient window appeared within 10 s. Run forti-debug.scpt and see the MANUAL.md debugging table." number 3
@@ -367,6 +460,14 @@ on run argv
 					set currentProfile to "" -- value unreadable; select via the dropdown
 				end try
 				if currentProfile is not profileName then
+					-- Selecting in the native <select> menu needs FortiClient frontmost:
+					-- both the menu-item click and the keystroke fallback only work on
+					-- the front app (field-confirmed: in the background the menu does not
+					-- take). So bring it to the front for the WHOLE selection, then hand
+					-- focus back. This is the only place forti.scpt steals focus, and only
+					-- on a real profile switch — same-profile reconnect and disconnect
+					-- stay in the background.
+					set prevApp to my focusFortiClient()
 					click vpnPopup
 					delay 0.4
 					-- Chromium opens the <select> as a native menu. Proper System
@@ -386,7 +487,7 @@ on run argv
 						set newProfile to value of vpnPopup -- unreadable mid-render: caught below as mismatch
 					end try
 					if newProfile is not profileName then
-						-- the menu is still open (both clicks failed): native menus
+						-- the menu is still open (the click did not take): native menus
 						-- select by typed prefix, Enter confirms
 						keystroke profileName
 						delay 0.2
@@ -397,11 +498,15 @@ on run argv
 						end try
 					end if
 					if newProfile is not profileName then
-						-- close whatever is still open, or it lingers over the
-						-- window and confuses the next run's element search
-						key code 53 -- Escape
+						-- close whatever is still open (or it lingers over the window and
+						-- confuses the next run's element search), restore focus, then fail
+						try
+							key code 53 -- Escape
+						end try
+						my restoreFront(prevApp)
 						error "Profile '" & profileName & "' not found in the 'VPN Name' dropdown — the name must match the dropdown entry. Run forti-debug.scpt and see the MANUAL.md debugging table." number 4
 					end if
+					my restoreFront(prevApp)
 					delay 0.8
 					-- the web view may have re-rendered after the profile switch
 					set elems to my buildIndex(entire contents of window 1)
@@ -452,7 +557,12 @@ on run argv
 	set connected to false
 	my progressBar("connecting", 0, 30)
 	repeat with i from 1 to 15
-		delay 2
+		-- ~2 s between connected-checks, but ping pushBack every ~0.3 s so the
+		-- window FortiClient raises on connect drops back behind the caller fast
+		repeat 7 times
+			delay 0.3
+			my pushBack(callerApp)
+		end repeat
 		my progressBar("connecting", i * 2, 30)
 		set elems to my safeWindowContents()
 		if my isConnected(elems) then
